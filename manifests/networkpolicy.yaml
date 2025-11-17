@@ -50,9 +50,11 @@ spec:
         - protocol: TCP
           port: 8080  # HTTP proxy
         - protocol: TCP
-          port: 10000-65535  # Диапазон для VPN
+          port: 10000
+          endPort: 65535  # Диапазон для VPN (TCP)
         - protocol: UDP
-          port: 10000-65535  # UDP для QUIC/mKCP
+          port: 10000
+          endPort: 65535  # UDP для QUIC/mKCP
 
 ---
 # Default Deny All Egress policy для других подов в namespace
