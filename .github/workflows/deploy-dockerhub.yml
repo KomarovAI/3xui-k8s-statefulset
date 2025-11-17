@@ -33,13 +33,7 @@ jobs:
           push: true
           tags: artur7892988/3xui-k8s-statefulset:latest
 
-      - name: Run Trivy vulnerability scanner (ultra-clean RAW debug output)
-        run: |
-          trivy image --no-progress --ignore-unfixed \
-            --severity CRITICAL,HIGH --quiet --format json artur7892988/3xui-k8s-statefulset:latest \
-            | jq -c '.Results // [] | map(select(.Vulnerabilities != null))[] | .Vulnerabilities[] | {ID, PkgName, InstalledVersion, FixedVersion, Title, Severity, References}'
-
-      - name: Run Trivy vulnerability scanner (SARIF)
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: artur7892988/3xui-k8s-statefulset:latest
@@ -49,7 +43,7 @@ jobs:
           exit-code: '0'
 
       - name: Upload Trivy scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
@@ -59,9 +53,16 @@ jobs:
         with:
           version: 'latest'
 
+      - name: Configure kubectl
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p $HOME/.kube
+          echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
       - name: Create Secret from GitHub Secrets
         env:
-          KUBECONFIG: ${{ secrets.KUBECONFIG }}
           XUI_ADMIN_USER: ${{ secrets.XUI_ADMIN_USER }}
           XUI_ADMIN_PASS: ${{ secrets.XUI_ADMIN_PASS }}
         run: |
@@ -72,8 +73,6 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Deploy to Kubernetes
-        env:
-          KUBECONFIG: ${{ secrets.KUBECONFIG }}
         run: |
           kubectl apply -f manifests/namespace.yaml
           kubectl apply -f manifests/storageclass.yaml
