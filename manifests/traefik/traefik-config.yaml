@@ -1,0 +1,36 @@
+# Конфигурация Traefik для автоматической выдачи SSL-сертификатов
+#
+# Применить эти аргументы к Traefik Deployment:
+#
+# kubectl patch deployment traefik -n traefik --type=json -p='[
+#   {
+#     "op": "add",
+#     "path": "/spec/template/spec/containers/0/args/-",
+#     "value": "--certificatesresolvers.letsencrypt.acme.email=admin@example.com"
+#   },
+#   {
+#     "op": "add",
+#     "path": "/spec/template/spec/containers/0/args/-",
+#     "value": "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+#   },
+#   {
+#     "op": "add",
+#     "path": "/spec/template/spec/containers/0/args/-",
+#     "value": "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+#   }
+# ]'
+#
+# Замени admin@example.com на свой email!
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: traefik-acme
+  namespace: traefik
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 128Mi
+  storageClassName: local-path  # K3s встроенный StorageClass
