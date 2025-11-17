@@ -3,11 +3,6 @@
 # ============================================
 FROM ghcr.io/mhsanaei/3x-ui:v2.5.3 AS builder
 
-WORKDIR /builder
-
-# Просто сохраняем структуру (без лишних build-слоев)
-# Не копируем несуществующие build/xray, build/x-ui!
-
 # ============================================
 # Stage 2: Runtime - финальный минимальный контейнер
 # ============================================
@@ -33,11 +28,8 @@ RUN addgroup -g 2000 x-ui && \
 RUN mkdir -p /etc/x-ui /usr/local/x-ui /usr/local/bin && \
     chown -R x-ui:x-ui /etc/x-ui /usr/local/x-ui
 
-# Копируем бинарник x-ui
 COPY --from=builder /usr/local/x-ui/x-ui /usr/local/bin/x-ui
-# Копируем core xray если есть
-COPY --from=builder /usr/local/x-ui/bin/xray* /usr/local/bin/
-# Копируем конфиги, сертификаты и прочее
+COPY --from=builder /usr/local/x-ui/bin/xray /usr/local/bin/xray
 COPY --from=builder /usr/local/x-ui/ /usr/local/x-ui/
 
 RUN chmod +x /usr/local/bin/x-ui /usr/local/bin/xray 2>/dev/null || true
