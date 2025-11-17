@@ -20,7 +20,7 @@ spec:
         - protocol: TCP
           port: 2053
   egress:
-    # DNS для резолва
+    # 1. DNS для резолва (только kube-system)
     - to:
         - namespaceSelector:
             matchLabels:
@@ -28,9 +28,49 @@ spec:
       ports:
         - protocol: UDP
           port: 53
-    # Интернет для VPN-трафика (все порты)
+        - protocol: TCP
+          port: 53
+    
+    # 2. HTTPS для Let's Encrypt, обновлений и API
     - to:
         - namespaceSelector: {}
       ports:
         - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80  # HTTP redirect на HTTPS
+    
+    # 3. VPN протоколы (распространенные порты)
+    # VLESS, VMess, Trojan, Shadowsocks
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 1080  # SOCKS
+        - protocol: TCP
+          port: 8080  # HTTP proxy
+        - protocol: TCP
+          port: 10000-65535  # Диапазон для VPN
         - protocol: UDP
+          port: 10000-65535  # UDP для QUIC/mKCP
+
+---
+# Default Deny All Egress policy для других подов в namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: xui-vpn
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Разрешаем только DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
