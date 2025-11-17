@@ -22,7 +22,7 @@
 # Permissions: repo (полный доступ)
 
 # 2. Создать Secret
-y kubectl create secret generic github-backup-secret \
+kubectl create secret generic github-backup-secret \
   --from-literal=token='ghp_YOUR_TOKEN' \
   -n xui-vpn
 
@@ -40,29 +40,46 @@ kubectl create job --from=cronjob/xui-selfbackup manual-backup-test -n xui-vpn
 
 ---
 
-## SSL-сертификаты через Let's Encrypt (Traefik) — секрет email в репозитории (production best practice)
+## 🔒 SSL-сертификаты через Let's Encrypt (Traefik)
 
-В новых версиях все параметры для автоматической выдачи Let's Encrypt вынесены безопасно в Kubernetes Secret:
+### Быстрая настройка SSL (автоматический скрипт)
 
-```yaml
-# manifests/traefik/letsencrypt-email-secret.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: letsencrypt-email
-  namespace: traefik
-type: Opaque
-stringData:
-  email: artur.komarovv@gmail.com
+```bash
+# Запустить скрипт настройки SSL:
+chmod +x deploy-ssl-setup.sh
+./deploy-ssl-setup.sh
 ```
 
-**Кратко шаги:**
-1. Применить Secret: `kubectl apply -f manifests/traefik/letsencrypt-email-secret.yaml`
-2. Применить/перезапустить PVC для cert storage: `kubectl apply -f manifests/traefik/traefik-config.yaml`
-3. Использовать патч для Traefik Deployment (см. комментарии в manifests/traefik/traefik-config.yaml)
+**Что делает скрипт:**
+1. ✅ Создаёт namespace `traefik` (если нет)
+2. ✅ Деплоит Kubernetes Secret с email для Let's Encrypt (`artur.komarovv@gmail.com`)
+3. ✅ Создаёт PVC для хранения сертификатов (`traefik-acme`)
+4. ✅ Патчит Traefik Deployment для автоматической выдачи SSL-сертификатов
 
-- email берётся из секрета, а не как аргумент в open YAML
-- все данные production email не попадают в исходный код, только в Secret
+**После запуска:**
+- Все IngressRoute с `tls.certResolver: letsencrypt` автоматически получат валидные SSL-сертификаты
+- Сертификаты хранятся в PVC и не теряются при перезапуске
+- Email берётся из Secret (не хранится в исходном коде)
+
+### Ручная настройка (если нужно)
+
+Если хочешь выполнить каждый шаг вручную:
+
+```bash
+# 1. Создать namespace traefik
+kubectl create namespace traefik --dry-run=client -o yaml | kubectl apply -f -
+
+# 2. Деплой email secret
+kubectl apply -f manifests/traefik/letsencrypt-email-secret.yaml
+
+# 3. Создать PVC для сертификатов
+kubectl apply -f manifests/traefik/traefik-config.yaml
+
+# 4. Патч Traefik (см. подробности в manifests/traefik/traefik-config.yaml)
+```
+
+**Подробные инструкции по патчу Traefik**: см. комментарии в `manifests/traefik/traefik-config.yaml`
+
 ---
 
 ## Интеграция с Traefik + HTTPS (Автоматические SSL-сертификаты)
@@ -90,7 +107,3 @@ IngressRoute → 3X-UI Service (порт 2053)
    ↓
 3X-UI Pod
 ```
-
-### Быстрый старт ... (остальное как в оригинале, указание на новые security best practices, encryption, ResourceQuota, NetworkPolicy)
-
-# (В остальных секциях добавить пояснения про secrets только через GitHub Secrets, encryption at rest, новые NetworkPolicies, ResourceQuota)
