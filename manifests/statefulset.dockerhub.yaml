@@ -10,7 +10,8 @@ spec:
     matchLabels:
       app: xui-panel
   updateStrategy:
-    type: OnDelete
+    type: RollingUpdate  # рекомендовано для zero-downtime, auto-updates
+  minReadySeconds: 10
   template:
     metadata:
       labels:
