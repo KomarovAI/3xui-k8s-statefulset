@@ -1,5 +1,7 @@
 # 3X-UI VPN Panel - Kubernetes Deployment
 
+> 🚀 **Production-ready?** Смотри быстрый старт: [README-prod-quickstart.md](README-prod-quickstart.md)
+
 ## 🚨 Безопасность CI/CD: Только ручной запуск
 
 **Внимание!** Все workflows GitHub Actions в этом репозитории запускаются **только вручную** (через Actions → Run workflow либо через GitHub CLI). Это защищает production и предотвращает автоматические или случайные деплои. См. [docs/SECURITY.md](docs/SECURITY.md).
