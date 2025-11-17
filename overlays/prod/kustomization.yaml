@@ -1,0 +1,30 @@
+resources:
+  - ../../manifests
+nameSuffix: -prod
+
+# Внеси production значения переменных сюда
+configMapGenerator:
+  - name: production-values
+    literals:
+      - NODE_NAME=node-1
+      - SERVER_IP=31.56.39.58
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: production-values
+      fieldPath: data.NODE_NAME
+    targets:
+      - select:
+          kind: PersistentVolume
+        fieldPaths:
+          - spec.nodeAffinity.required.nodeSelectorTerms.0.matchExpressions.0.values.0
+  - source:
+      kind: ConfigMap
+      name: production-values
+      fieldPath: data.SERVER_IP
+    targets:
+      - select:
+          kind: IngressRoute
+        fieldPaths:
+          - spec.routes.0.match
