@@ -1,7 +1,10 @@
-name: Build, Push & Deploy 3X-UI via Docker Hub - Manual Only
+name: Build, Push & Deploy 3X-UI via Docker Hub - Push or Manual
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build-push-deploy:
@@ -53,7 +56,6 @@ jobs:
           XUI_ADMIN_USER: ${{ secrets.XUI_ADMIN_USER }}
           XUI_ADMIN_PASS: ${{ secrets.XUI_ADMIN_PASS }}
         run: |
-          # Создаем Secret из GitHub Secrets вместо файла
           kubectl create secret generic xui-admin-secret \
             --from-literal=XUI_ADMIN_USER="${XUI_ADMIN_USER}" \
             --from-literal=XUI_ADMIN_PASS="${XUI_ADMIN_PASS}" \
@@ -64,20 +66,13 @@ jobs:
         env:
           KUBECONFIG: ${{ secrets.KUBECONFIG }}
         run: |
-          # Основные манифесты
           kubectl apply -f manifests/namespace.yaml
           kubectl apply -f manifests/storageclass.yaml
           kubectl apply -f manifests/persistentvolume.yaml
           kubectl apply -f manifests/persistentvolumeclaim.yaml
           kubectl apply -f manifests/statefulset.dockerhub.yaml
           kubectl apply -f manifests/cronjob-backup.yaml
-          
-          # Traefik интеграция
           kubectl apply -f manifests/service.yaml
           kubectl apply -f manifests/ingressroute.yaml
-          
-          # NetworkPolicy
           kubectl apply -f manifests/networkpolicy.yaml
-          
-          # Ожидание готовности
           kubectl rollout status statefulset/xui-panel -n xui-vpn --timeout=300s
