@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: xui-vpn
+  labels:
+    name: xui-vpn
+    app: 3x-ui
