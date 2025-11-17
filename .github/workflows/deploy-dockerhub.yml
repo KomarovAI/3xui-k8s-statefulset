@@ -63,6 +63,10 @@ jobs:
           echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
+      - name: Create namespace first
+        run: |
+          kubectl apply -f manifests/namespace.yaml
+
       - name: Create Secret from GitHub Secrets
         env:
           XUI_ADMIN_USER: ${{ secrets.XUI_ADMIN_USER }}
@@ -76,7 +80,6 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f manifests/namespace.yaml
           kubectl apply -f manifests/storageclass.yaml
           kubectl apply -f manifests/persistentvolume.yaml
           kubectl apply -f manifests/persistentvolumeclaim.yaml
