@@ -1,0 +1,93 @@
+# Git и version control
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# CI/CD
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Документация
+*.md
+README*
+LICENSE
+CHANGELOG*
+docs/
+
+# Kubernetes manifests (не нужны в образе)
+manifests/
+overlays/
+kustomization.yaml
+*.yaml
+*.yml
+
+# Scripts (если не используются в runtime)
+scripts/
+*.sh
+deploy.sh
+uninstall.sh
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Логи и temporary файлы
+*.log
+logs/
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Бэкапы
+backups/
+*.backup
+*.bak
+*.tar.gz
+*.zip
+
+# Секреты (не должны попасть в образ)
+*.env
+.env*
+secret*.yaml
+credentials*
+*.pem
+*.key
+*.crt
+
+# Node.js / Python / другие языки
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
+
+# Build артефакты
+build/
+dist/
+*.o
+*.so
+*.exe
+
+# Тесты
+tests/
+test/
+*.test
+
+# Coverage reports
+coverage/
+*.coverage
+htmlcov/
+
+# Docker файлы (исключаем сам себя, оставляем Dockerfile)
+docker-compose*.yml
+.dockerignore
