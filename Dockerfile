@@ -2,7 +2,7 @@
 FROM ghcr.io/mhsanaei/3x-ui:v2.5.3 AS builder
 
 # Stage 2: Runtime
-FROM alpine:3.19
+FROM alpine:3.20
 
 LABEL maintainer="KomarovAI"
 LABEL version="2.5.3-optimized"
