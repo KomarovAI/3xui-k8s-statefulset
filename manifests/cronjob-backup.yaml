@@ -5,15 +5,17 @@ metadata:
   namespace: xui-vpn
 spec:
   schedule: "0 3 * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: 86400
       template:
         metadata:
           labels:
             app: xui-selfbackup
         spec:
           restartPolicy: OnFailure
-          hostNetwork: true
           volumes:
             - name: xui-data
               persistentVolumeClaim:
@@ -24,7 +26,14 @@ spec:
               volumeMounts:
                 - mountPath: /backup
                   name: xui-data
+              resources:
+                limits:
+                  memory: 64Mi
+                  cpu: 200m
+                requests:
+                  memory: 32Mi
+                  cpu: 50m
               command:
                 - sh
                 - -c
-                - "find /backup -name 'xui-backup-*.tar.gz' -mtime +2 -delete; tar -czf /backup/xui-backup-$(date +%Y%m%d-%H%M%S).tar.gz -C /backup . && echo 'Backup complete.'"
+                - "find /backup -name 'xui-backup-*.tar.gz' -mtime +2 -delete; tar --use-compress-program=\"gzip -1\" -cf /backup/xui-backup-$(date +%Y%m%d-%H%M%S).tar.gz -C /backup . --exclude='xui-backup-*.tar.gz' && echo 'Backup complete.'"

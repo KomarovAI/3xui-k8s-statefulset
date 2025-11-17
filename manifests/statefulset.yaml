@@ -30,7 +30,6 @@ spec:
       labels:
         app: xui-panel
     spec:
-      hostNetwork: true
       automountServiceAccountToken: false
       containers:
         - name: xui
@@ -41,16 +40,32 @@ spec:
               mountPath: /etc/x-ui
           resources:
             limits:
-              memory: 512Mi
-              cpu: 1000m
-            requests:
               memory: 256Mi
               cpu: 500m
+            requests:
+              memory: 256Mi
+              cpu: 100m
           securityContext:
             privileged: false
             capabilities:
               add:
                 - NET_ADMIN
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 2053
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 2053
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
       volumes:
         - name: data
           persistentVolumeClaim:
