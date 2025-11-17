@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: xui-panel
+  namespace: xui-vpn
+spec:
+  serviceName: xui
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xui-panel
+  updateStrategy:
+    type: OnDelete
+  template:
+    metadata:
+      labels:
+        app: xui-panel
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: xui
+          image: artur7892988/3xui-k8s-statefulset:latest
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: data
+              mountPath: /etc/x-ui
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: 500m
+            requests:
+              memory: 256Mi
+              cpu: 100m
+          securityContext:
+            privileged: false
+            capabilities:
+              add:
+                - NET_ADMIN
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 2053
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 2053
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: xui-data-pvc
