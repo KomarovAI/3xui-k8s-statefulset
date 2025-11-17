@@ -1,0 +1,39 @@
+# Kubernetes Secrets
+manifests/*secret*.yaml
+manifests/*Secret*.yaml
+**/secret.yaml
+**/Secret.yaml
+
+# Kubeconfig
+kubeconfig*
+*.kubeconfig
+
+# Credentials
+*.env
+.env.*
+credentials.json
+
+# Backups с чувствительными данными
+*.db
+*.tar.gz
+backups/
+
+# Kustomize overlays с реальными значениями
+overlays/prod/server-config.yaml
+overlays/*/secrets.yaml
+
+# GPG ключи
+*.asc
+*.gpg
+private-keys/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
