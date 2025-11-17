@@ -7,12 +7,15 @@ on:
       - main
 
 jobs:
-  build-push-deploy:
+  # Job 1: GitHub-hosted runner - максимальная параллелизация
+  build-and-scan:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
       actions: read
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -27,12 +30,15 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and Push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: artur7892988/3xui-k8s-statefulset:latest
+          cache-from: type=registry,ref=artur7892988/3xui-k8s-statefulset:buildcache
+          cache-to: type=registry,ref=artur7892988/3xui-k8s-statefulset:buildcache,mode=max
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -50,24 +56,23 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
+  # Job 2: Self-hosted runner на VPS - деплой в K8s
+  deploy:
+    runs-on: self-hosted
+    needs: build-and-scan
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Configure kubectl
-        env:
-          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}
+      - name: Pull latest image from DockerHub
         run: |
-          mkdir -p $HOME/.kube
-          echo "$KUBECONFIG_CONTENT" > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          docker pull artur7892988/3xui-k8s-statefulset:latest
 
-      - name: Create namespace first
+      - name: Create namespace
         run: |
           kubectl apply -f manifests/namespace.yaml
 
-      - name: Create Secret from GitHub Secrets
+      - name: Create admin secret
         env:
           XUI_ADMIN_USER: ${{ secrets.XUI_ADMIN_USER }}
           XUI_ADMIN_PASS: ${{ secrets.XUI_ADMIN_PASS }}
@@ -78,14 +83,25 @@ jobs:
             -n xui-vpn \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy to Kubernetes
+      - name: Deploy infrastructure
         run: |
           kubectl apply -f manifests/storageclass.yaml
           kubectl apply -f manifests/persistentvolume.yaml
           kubectl apply -f manifests/persistentvolumeclaim.yaml
+
+      - name: Deploy application
+        run: |
           kubectl apply -f manifests/statefulset.dockerhub.yaml
           kubectl apply -f manifests/cronjob-backup.yaml
           kubectl apply -f manifests/service.yaml
           kubectl apply -f manifests/ingressroute.yaml
           kubectl apply -f manifests/networkpolicy.yaml
+
+      - name: Wait for rollout
+        run: |
           kubectl rollout status statefulset/xui-panel -n xui-vpn --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n xui-vpn
+          kubectl get svc -n xui-vpn
