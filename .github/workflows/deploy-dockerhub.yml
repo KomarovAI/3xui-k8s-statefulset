@@ -33,13 +33,11 @@ jobs:
           push: true
           tags: artur7892988/3xui-k8s-statefulset:latest
 
-      - name: Run Trivy vulnerability scanner (console, only important RAW output)
+      - name: Run Trivy vulnerability scanner (ultra-clean RAW debug output)
         run: |
           trivy image --no-progress --ignore-unfixed \
-            --severity CRITICAL,HIGH --quiet \
-            --format json artur7892988/3xui-k8s-statefulset:latest \
-            | jq -c 'del(.Results[] | select(.Vulnerabilities == null)) | .Results[] | select(.Vulnerabilities != null) | {Target, Vulns: [.Vulnerabilities[] | {ID, PkgName, InstalledVersion, FixedVersion, Title, Severity, References}]}' > trivy-important.json
-          cat trivy-important.json
+            --severity CRITICAL,HIGH --quiet --format json artur7892988/3xui-k8s-statefulset:latest \
+            | jq -c '.Results // [] | map(select(.Vulnerabilities != null))[] | .Vulnerabilities[] | {ID, PkgName, InstalledVersion, FixedVersion, Title, Severity, References}'
 
       - name: Run Trivy vulnerability scanner (SARIF)
         uses: aquasecurity/trivy-action@master
