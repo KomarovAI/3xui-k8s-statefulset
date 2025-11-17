@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: xui-selfbackup
+  namespace: xui-vpn
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: xui-selfbackup
+        spec:
+          restartPolicy: OnFailure
+          hostNetwork: true
+          volumes:
+            - name: xui-data
+              persistentVolumeClaim:
+                claimName: xui-data-pvc
+          containers:
+            - name: backup
+              image: busybox:latest
+              volumeMounts:
+                - mountPath: /backup
+                  name: xui-data
+              command:
+                - sh
+                - -c
+                - "tar -czf /backup/xui-backup-$(date +%Y%m%d-%H%M%S).tar.gz -C /backup . && echo 'Backup complete.'"
