@@ -36,6 +36,7 @@ jobs:
         env:
           KUBECONFIG: ${{ secrets.KUBECONFIG }}
         run: |
+          # Основные манифесты
           kubectl apply -f manifests/namespace.yaml
           kubectl apply -f manifests/storageclass.yaml
           kubectl apply -f manifests/persistentvolume.yaml
@@ -43,3 +44,10 @@ jobs:
           kubectl apply -f manifests/secret.yaml
           kubectl apply -f manifests/statefulset.dockerhub.yaml
           kubectl apply -f manifests/cronjob-backup.yaml
+          
+          # Traefik интеграция
+          kubectl apply -f manifests/service.yaml
+          kubectl apply -f manifests/ingressroute.yaml
+          
+          # Ожидание готовности
+          kubectl rollout status statefulset/xui-panel -n xui-vpn --timeout=300s
