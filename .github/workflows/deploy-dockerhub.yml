@@ -34,7 +34,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          exit-code: '0'  # Не ломать CI, только предупреждать
+          exit-code: '1'  # БЛОКИРОВАТЬ деплой при CRITICAL/HIGH уязвимостях
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v2
@@ -47,6 +47,19 @@ jobs:
         with:
           version: 'latest'
 
+      - name: Create Secret from GitHub Secrets
+        env:
+          KUBECONFIG: ${{ secrets.KUBECONFIG }}
+          XUI_ADMIN_USER: ${{ secrets.XUI_ADMIN_USER }}
+          XUI_ADMIN_PASS: ${{ secrets.XUI_ADMIN_PASS }}
+        run: |
+          # Создаем Secret из GitHub Secrets вместо файла
+          kubectl create secret generic xui-admin-secret \
+            --from-literal=XUI_ADMIN_USER="${XUI_ADMIN_USER}" \
+            --from-literal=XUI_ADMIN_PASS="${XUI_ADMIN_PASS}" \
+            -n xui-vpn \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Deploy to Kubernetes
         env:
           KUBECONFIG: ${{ secrets.KUBECONFIG }}
@@ -56,7 +69,6 @@ jobs:
           kubectl apply -f manifests/storageclass.yaml
           kubectl apply -f manifests/persistentvolume.yaml
           kubectl apply -f manifests/persistentvolumeclaim.yaml
-          kubectl apply -f manifests/secret.yaml
           kubectl apply -f manifests/statefulset.dockerhub.yaml
           kubectl apply -f manifests/cronjob-backup.yaml
           
