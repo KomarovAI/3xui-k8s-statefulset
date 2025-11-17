@@ -78,6 +78,14 @@ jobs:
         run: |
           kubectl apply -f manifests/namespace.yaml
 
+      - name: Deploy Let's Encrypt email secret to Traefik
+        run: |
+          kubectl apply -f manifests/traefik/letsencrypt-email-secret.yaml
+
+      - name: Deploy Traefik ACME storage PVC
+        run: |
+          kubectl apply -f manifests/traefik/traefik-config.yaml
+
       - name: Create admin secret
         env:
           XUI_ADMIN_USER: ${{ secrets.XUI_ADMIN_USER }}
