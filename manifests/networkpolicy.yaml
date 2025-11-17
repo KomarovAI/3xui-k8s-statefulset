@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: xui-panel-netpol
+  namespace: xui-vpn
+spec:
+  podSelector:
+    matchLabels:
+      app: xui-panel
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Только от Traefik
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: traefik
+      ports:
+        - protocol: TCP
+          port: 2053
+  egress:
+    # DNS для резолва
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Интернет для VPN-трафика (все порты)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+        - protocol: UDP
