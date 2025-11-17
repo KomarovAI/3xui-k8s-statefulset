@@ -1,22 +1,36 @@
-### Оптимизация потребления ресурсов: что теперь сделано
+### Добавлена поддержка секретов для логина и пароля
 
-- **StatefulSet:**
-  - Memory limit: 512Mi → 256Mi
-  - CPU limit: 1000m → 500m
-  - Memory request: 256Mi → 256Mi (теперь Guaranteed QoS)
-  - CPU request: 500m → 100m
-  - Добавлены liveness и readiness probes
-- **Бэкап (CronJob):**
-  - Добавлены resource limits/requests (64Mi/32Mi mem, 200m/50m cpu)
-  - Оптимизирована компрессия tar (gzip -1)
-  - История успешных/failed Job хранится 1 сутки и автоудаляется
-  - Бэкап не архивирует уже существующие архивы (исключение по pattern)
-- **Итого:**
-  - **Потребление CPU снизилось на 70-80%** для основной панели
-  - **Потребление RAM — на 50%**
-  - Бэкап CronJob теперь прогнозируем по load
-  - Весь функционал полностью сохранён
+- Создавай секрет через manifests/secret.yaml:
 
-Все изменения в manifests/statefulset.yaml и manifests/cronjob-backup.yaml.
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xui-admin-secret
+  namespace: xui-vpn
+stringData:
+  XUI_ADMIN_USER: "admin"
+  XUI_ADMIN_PASS: "supersecurepassword"
+```
 
-Реальное влияние: система станет "мягкой" к ресурсам, не мешает другим подам, не тревожит kubelet OOM killer'ом.
+- В StatefultSet добавлен yaml-фрагмент для внедрения в env (см. manifests/statefulset.secret.env.yaml):
+
+```yaml
+      env:
+        - name: XUI_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: xui-admin-secret
+              key: XUI_ADMIN_USER
+        - name: XUI_ADMIN_PASS
+          valueFrom:
+            secretKeyRef:
+              name: xui-admin-secret
+              key: XUI_ADMIN_PASS
+```
+
+- Теперь можно залить свои значения без пересборки кода, пароль не хранится в явном виде — только через K8s Secret.
+- После этого переменные XUI_ADMIN_USER/XUI_ADMIN_PASS попадают в ENV контейнера.
+- Если образ 3X-UI поддерживает init-пароль через ENV (или скрипт init), при запуске подхватит эти значения; иначе требуется init-хук/скрипт для применения.
+
+Все шаги и шаблоны находятся в manifests/secret.yaml и manifests/statefulset.secret.env.yaml.
