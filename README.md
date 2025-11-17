@@ -22,7 +22,7 @@
 # Permissions: repo (полный доступ)
 
 # 2. Создать Secret
-kubectl create secret generic github-backup-secret \
+y kubectl create secret generic github-backup-secret \
   --from-literal=token='ghp_YOUR_TOKEN' \
   -n xui-vpn
 
@@ -38,6 +38,31 @@ kubectl create job --from=cronjob/xui-selfbackup manual-backup-test -n xui-vpn
 
 **Просмотр бэкапов**: https://github.com/KomarovAI/3xui-k8s-statefulset/tree/backups
 
+---
+
+## SSL-сертификаты через Let's Encrypt (Traefik) — секрет email в репозитории (production best practice)
+
+В новых версиях все параметры для автоматической выдачи Let's Encrypt вынесены безопасно в Kubernetes Secret:
+
+```yaml
+# manifests/traefik/letsencrypt-email-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: letsencrypt-email
+  namespace: traefik
+type: Opaque
+stringData:
+  email: artur.komarovv@gmail.com
+```
+
+**Кратко шаги:**
+1. Применить Secret: `kubectl apply -f manifests/traefik/letsencrypt-email-secret.yaml`
+2. Применить/перезапустить PVC для cert storage: `kubectl apply -f manifests/traefik/traefik-config.yaml`
+3. Использовать патч для Traefik Deployment (см. комментарии в manifests/traefik/traefik-config.yaml)
+
+- email берётся из секрета, а не как аргумент в open YAML
+- все данные production email не попадают в исходный код, только в Secret
 ---
 
 ## Интеграция с Traefik + HTTPS (Автоматические SSL-сертификаты)
@@ -65,6 +90,7 @@ IngressRoute → 3X-UI Service (порт 2053)
    ↓
 3X-UI Pod
 ```
+
 ### Быстрый старт ... (остальное как в оригинале, указание на новые security best practices, encryption, ResourceQuota, NetworkPolicy)
 
 # (В остальных секциях добавить пояснения про secrets только через GitHub Secrets, encryption at rest, новые NetworkPolicies, ResourceQuota)
