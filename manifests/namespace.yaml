@@ -5,3 +5,7 @@ metadata:
   labels:
     name: xui-vpn
     app: 3x-ui
+    # Pod Security Standards
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

@@ -56,7 +56,7 @@ kubectl create job --from=cronjob/xui-selfbackup manual-backup-test -n xui-vpn
 ```
 Интернет
    ↓
-DNS: xui.31.56.39.58.nip.io → 31.56.39.58
+DNS: xui.${SERVER_IP}.nip.io → ${SERVER_IP}
    ↓
 Traefik (порты 80/443)
    ↓ Let's Encrypt SSL
@@ -94,19 +94,15 @@ kubectl apply -f manifests/statefulset.dockerhub.yaml
 kubectl apply -f manifests/service.yaml
 kubectl apply -f manifests/ingressroute.yaml
 kubectl apply -f manifests/cronjob-backup.yaml
+kubectl apply -f manifests/networkpolicy.yaml
 ```
 
 #### 3. Проверка
 
 ```bash
-# Проверить статус
 kubectl get all -n xui-vpn
 kubectl get ingressroute -n xui-vpn
-
-# Проверить сертификаты Traefik
 kubectl exec -n traefik deployment/traefik -- cat /data/acme.json | jq
-
-# Логи Traefik
 kubectl logs -n traefik deployment/traefik -f
 ```
 
@@ -115,7 +111,7 @@ kubectl logs -n traefik deployment/traefik -f
 После развертывания панель доступна по HTTPS:
 
 ```
-URL: https://xui.31.56.39.58.nip.io
+URL: https://xui.${SERVER_IP}.nip.io
 Логин: (из GitHub Secrets XUI_ADMIN_USER)
 Пароль: (из GitHub Secrets XUI_ADMIN_PASS)
 ```
@@ -131,10 +127,10 @@ URL: https://xui.31.56.39.58.nip.io
 
 ### Как это работает
 
-1. **Пользователь** заходит на `https://xui.31.56.39.58.nip.io`
-2. **DNS nip.io** автоматически резолвит → `31.56.39.58`
+1. **Пользователь** заходит на `https://xui.${SERVER_IP}.nip.io`
+2. **DNS nip.io** автоматически резолвит → `${SERVER_IP}`
 3. **Traefik** (порт 443) получает запрос
-4. **IngressRoute** матчит `Host(xui.31.56.39.58.nip.io)`
+4. **IngressRoute** матчит `Host(xui.${SERVER_IP}.nip.io)`
 5. **Traefik** проксирует → Service `xui-panel-service:2053`
 6. **Service** проксирует → Pod `xui-panel-0:2053`
 7. **Let's Encrypt** автоматически выдает SSL-сертификат
@@ -144,20 +140,9 @@ URL: https://xui.31.56.39.58.nip.io
 
 ## Поддержка секретов для логина и пароля
 
-Создавай секрет через `manifests/secret.yaml`:
+> Описание демонстрационное. Настоящие секреты всегда должны храниться в GitHub Secrets, .env или внешних secret management системах, а НЕ в исходном коде/репозитории!
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: xui-admin-secret
-  namespace: xui-vpn
-stringData:
-  XUI_ADMIN_USER: "admin"
-  XUI_ADMIN_PASS: "supersecurepassword"
-```
-
-В StatefulSet добавлен yaml-фрагмент для внедрения в env (`manifests/statefulset.secret.env.yaml`):
+В StatefulSet добавлен yaml-фрагмент для внедрения секретов (`manifests/statefulset.secret.env.yaml`):
 
 ```yaml
 env:
@@ -177,56 +162,42 @@ env:
 
 ---
 
+## Дополнительные улучшения безопасности
+
+- [x] Ограничен ingress/egress через manifests/networkpolicy.yaml
+- [x] Включены Pod Security Standards (baseline)
+- [x] Pipeline сканирует образы Trivy
+- [ ] Для production использования рекомендуются Sealed Secrets/external secret-manager
+- [ ] Для публичных IP используйте Kustomize/ConfigMap для подстановки реального значения
+- [ ] Для бэкапов используйте GPG/age шифрование
+
+---
+
 ## Troubleshooting
 
-### Проверка Traefik
+### Traefik
 
 ```bash
-# Проверить, что ACME resolver добавлен
 kubectl get deployment traefik -n traefik -o yaml | grep letsencrypt
-
-# Проверить сертификаты
 kubectl exec -n traefik deployment/traefik -- cat /data/acme.json
-
-# Логи Traefik (поиск ACME ошибок)
 kubectl logs -n traefik deployment/traefik | grep -i acme
 ```
 
-### Проверка IngressRoute
+### IngressRoute
 
 ```bash
-# Проверить статус
 kubectl get ingressroute -n xui-vpn
 kubectl describe ingressroute xui-panel-https -n xui-vpn
 ```
 
 ### Если сертификат не выдается
 
-1. Убедись, что порт **80** открыт (для HTTP Challenge)
+1. Проверь порт **80** (HTTP Challenge)
 2. Проверь DNS:
    ```bash
-   nslookup xui.31.56.39.58.nip.io
-   # Должно вернуть 31.56.39.58
+   nslookup xui.${SERVER_IP}.nip.io
    ```
-3. Проверь логи Traefik:
+3. Проверь логи Traefik
    ```bash
    kubectl logs -n traefik deployment/traefik -f | grep -i error
    ```
-
----
-
-## CI/CD через GitHub Actions
-
-Репозиторий включает **Только ручной** запуск workflows (Actions → Run workflow):
-
-1. Сборка Docker-образа (deploy-dockerhub.yml)
-2. Деплой всех манифестов (deploy.yml)
-
-Все GUID-документы по безопасности — см. [docs/SECURITY.md](docs/SECURITY.md).
-
-Необходимые GitHub Secrets:
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-- `KUBECONFIG`
-- `XUI_ADMIN_USER`
-- `XUI_ADMIN_PASS`
