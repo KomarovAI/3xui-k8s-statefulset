@@ -28,6 +28,7 @@ RUN addgroup -g 2000 x-ui && \
 RUN mkdir -p /etc/x-ui /usr/local/x-ui /usr/local/bin && \
     chown -R x-ui:x-ui /etc/x-ui /usr/local/x-ui
 
+# Все COPY явно абсолютными путями
 COPY --from=builder /usr/local/x-ui/x-ui /usr/local/bin/x-ui
 COPY --from=builder /usr/local/x-ui/bin/xray /usr/local/bin/xray
 COPY --from=builder /usr/local/x-ui/ /usr/local/x-ui/
