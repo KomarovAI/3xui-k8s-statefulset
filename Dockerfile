@@ -22,10 +22,11 @@ RUN addgroup -g 2000 x-ui && \
 RUN mkdir -p /etc/x-ui /app && \
     chown -R x-ui:x-ui /etc/x-ui /app
 
-COPY --from=builder /app/ /app/
-COPY --from=builder /usr/bin/x-ui /usr/bin/x-ui
+COPY --from=builder --chown=x-ui:x-ui /app/ /app/
+COPY --from=builder --chown=x-ui:x-ui /usr/bin/x-ui /usr/bin/x-ui
 
-RUN chmod +x /app/x-ui /usr/bin/x-ui 2>/dev/null || true
+RUN chmod +x /app/x-ui /usr/bin/x-ui 2>/dev/null || true && \
+    chown -R x-ui:x-ui /app
 
 WORKDIR /app
 VOLUME ["/etc/x-ui"]
