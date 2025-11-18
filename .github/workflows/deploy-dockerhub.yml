@@ -64,11 +64,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Ensure /opt/xui-vpn/data exists (idempotent)
+      - name: Ensure /opt/xui-vpn/data exists with correct permissions
         run: |
           sudo mkdir -p /opt/xui-vpn/data
-          sudo chown 1000:1000 /opt/xui-vpn/data || sudo chown root:root /opt/xui-vpn/data
-          sudo chmod 777 /opt/xui-vpn/data
+          sudo chown -R 2000:2000 /opt/xui-vpn/data
+          sudo chmod -R 755 /opt/xui-vpn/data
 
       - name: Pull latest image from DockerHub
         run: |
