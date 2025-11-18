@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: xui-panel-pdb
+  namespace: xui-vpn
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: xui-panel
