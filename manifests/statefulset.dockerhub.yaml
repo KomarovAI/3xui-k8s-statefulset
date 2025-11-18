@@ -18,6 +18,10 @@ spec:
         app: xui-panel
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 2000
+        runAsUser: 2000
+        runAsNonRoot: true
       containers:
         - name: xui
           image: artur7892988/3xui-k8s-statefulset:latest
@@ -34,6 +38,8 @@ spec:
               cpu: 100m
           securityContext:
             privileged: false
+            allowPrivilegeEscalation: false
+            runAsUser: 2000
             capabilities:
               add:
                 - NET_ADMIN
