@@ -74,8 +74,9 @@ jobs:
         run: |
           docker pull artur7892988/3xui-k8s-statefulset:latest
 
-      - name: Create namespace
+      - name: Create namespaces
         run: |
+          kubectl create namespace traefik --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f manifests/namespace.yaml
 
       - name: Deploy Let's Encrypt email secret to Traefik
