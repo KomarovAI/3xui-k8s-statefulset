@@ -111,6 +111,8 @@ jobs:
           kubectl apply -f manifests/service.yaml
           kubectl apply -f manifests/ingressroute.yaml
           kubectl apply -f manifests/networkpolicy.yaml
+          kubectl apply -f manifests/networkpolicy-dns.yaml
+          kubectl apply -f manifests/poddisruptionbudget.yaml
 
       - name: Wait for rollout
         run: |
@@ -120,3 +122,4 @@ jobs:
         run: |
           kubectl get pods -n xui-vpn
           kubectl get svc -n xui-vpn
+          kubectl get ingressroute -n xui-vpn
