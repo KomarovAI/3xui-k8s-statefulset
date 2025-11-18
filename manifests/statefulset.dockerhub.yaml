@@ -43,22 +43,31 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 2053
-            initialDelaySeconds: 30
-            periodSeconds: 30
-            timeoutSeconds: 5
-            failureThreshold: 3
-          readinessProbe:
+          # startupProbe дает приложению до 5 минут на первый старт
+          startupProbe:
             httpGet:
               path: /
               port: 2053
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 3
+            failureThreshold: 30  # 300 секунд = 5 минут на старт
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 2053
+            initialDelaySeconds: 90   # Увеличено с 30 до 90 для стабильности
+            periodSeconds: 30
+            timeoutSeconds: 10        # Увеличено с 5 до 10
+            failureThreshold: 5       # Увеличено с 3 до 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 2053
+            initialDelaySeconds: 60   # Увеличено с 10 до 60
+            periodSeconds: 15         # Увеличено с 10 до 15
+            timeoutSeconds: 10        # Увеличено с 5 до 10
+            failureThreshold: 5       # Увеличено с 3 до 5
       volumes:
         - name: data
           persistentVolumeClaim:
