@@ -11,6 +11,7 @@ set -e
 DATA_DIR=${XUI_DATA_DIR:-/etc/x-ui}
 PORT=${XUI_PORT:-2053}
 LOG_LEVEL=${XUI_LOG_LEVEL:-info}
+ADMIN_PATH=${XUI_ADMIN_PATH:-admin-secret-path-12345}
 
 echo "═══════════════════════════════════════════════════════════════════════════"
 echo "🚀 Starting 3X-UI VPN Panel for Kubernetes"
@@ -38,6 +39,7 @@ echo "   • Namespace: ${POD_NAMESPACE:-unknown}"
 echo "   • Data Directory: $DATA_DIR"
 echo "   • Port: $PORT"
 echo "   • Log Level: $LOG_LEVEL"
+echo "   • Admin Path: /$ADMIN_PATH"
 echo "   • User: $(id -u):$(id -g)"
 echo ""
 
@@ -51,9 +53,9 @@ fi
 echo ""
 echo "═══════════════════════════════════════════════════════════════════════════"
 echo "✅ All pre-flight checks passed"
-echo "🚀 Launching 3X-UI on port $PORT..."
+echo "🚀 Launching 3X-UI on port $PORT and admin path /$ADMIN_PATH ..."
 echo "═══════════════════════════════════════════════════════════════════════════"
 echo ""
 
-# Start 3X-UI (replace with actual command from base image)
-exec x-ui "$@"
+# Start 3X-UI with custom admin path
+exec x-ui --admin-path "/$ADMIN_PATH" "$@"
