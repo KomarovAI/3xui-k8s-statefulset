@@ -1,0 +1,108 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🚀 ULTRA-OPTIMIZED 3X-UI DOCKERFILE FOR KUBERNETES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Multi-stage build для минимизации размера образа
+# Security hardening + non-root user
+# Healthcheck для Kubernetes probes
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Stage 1: Base image with security updates
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FROM ghcr.io/mhsanaei/3x-ui:latest AS base
+
+# Metadata labels (OCI standard)
+LABEL org.opencontainers.image.title="3X-UI VPN Panel for Kubernetes"
+LABEL org.opencontainers.image.description="Production-ready 3X-UI with security hardening"
+LABEL org.opencontainers.image.vendor="KomarovAI"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.source="https://github.com/KomarovAI/3xui-k8s-statefulset"
+LABEL maintainer="artur.komarovv@gmail.com"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Stage 2: Security hardening
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FROM base AS security
+
+# Update packages for security patches
+RUN apk update && \
+    apk upgrade --no-cache && \
+    # Install minimal dependencies
+    apk add --no-cache \
+        ca-certificates \
+        tzdata \
+        curl \
+        wget && \
+    # Remove unnecessary packages to reduce attack surface
+    apk del --no-cache \
+        apk-tools && \
+    # Clean up caches
+    rm -rf \
+        /var/cache/apk/* \
+        /tmp/* \
+        /var/tmp/* \
+        /root/.cache
+
+# Set timezone (можно изменить через ENV)
+ENV TZ=Europe/Moscow
+RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Stage 3: User and permissions setup
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FROM security AS runtime
+
+# Create non-root user (xui:2000)
+RUN if ! getent group xui > /dev/null 2>&1; then \
+        addgroup -g 2000 -S xui; \
+    fi && \
+    if ! id -u xui > /dev/null 2>&1; then \
+        adduser -u 2000 -S xui -G xui -h /home/xui -s /bin/sh; \
+    fi
+
+# Create necessary directories with correct permissions
+RUN mkdir -p \
+        /etc/x-ui \
+        /home/xui \
+        /var/log/xui && \
+    chown -R 2000:2000 \
+        /etc/x-ui \
+        /home/xui \
+        /var/log/xui && \
+    chmod -R 750 /etc/x-ui /home/xui /var/log/xui
+
+# Copy custom scripts
+COPY --chown=2000:2000 scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=2000:2000 scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
+
+# Make scripts executable
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Final configuration
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Healthcheck для раннего обнаружения проблем
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD /usr/local/bin/healthcheck.sh || exit 1
+
+# Switch to non-root user
+USER 2000:2000
+
+# Working directory
+WORKDIR /home/xui
+
+# Expose port
+EXPOSE 2053
+
+# Volume для persistent data
+VOLUME ["/etc/x-ui"]
+
+# Environment variables
+ENV XUI_DATA_DIR=/etc/x-ui \
+    XUI_LOG_LEVEL=info \
+    XUI_PORT=2053
+
+# Entrypoint
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
