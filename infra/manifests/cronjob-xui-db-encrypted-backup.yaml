@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: xui-db-encrypted-backup
+  namespace: xui-vpn
+spec:
+  schedule: "0 3 * * *"  # Каждый день в 03:00
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: xui-db-encrypted-backup
+        spec:
+          restartPolicy: OnFailure
+          volumes:
+            - name: xui-data
+              persistentVolumeClaim:
+                claimName: xui-data-pvc
+            - name: backup-keys
+              secret:
+                secretName: backup-encryption-key
+          containers:
+            - name: backup-and-encrypt
+              image: alpine:3.20
+              volumeMounts:
+                - mountPath: /backup
+                  name: xui-data
+                - mountPath: /keys
+                  name: backup-keys
+              env:
+                - name: PASSPHRASE_FILE
+                  value: /keys/backup-pass
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  apk add --no-cache gpg tar gzip
+                  BACKUP_FILE="xui-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+                  SEC_FILE="$BACKUP_FILE.gpg"
+                  tar czf "/backup/$BACKUP_FILE" -C /backup x-ui.db config.json cert/ 2>/dev/null || true
+                  gpg --batch --passphrase-file "$PASSPHRASE_FILE" --symmetric --cipher-algo AES256 "/backup/$BACKUP_FILE"
+                  rm -f "/backup/$BACKUP_FILE"
+                  echo "Encrypted backup created: $SEC_FILE"
+              resources:
+                limits:
+                  memory: 128Mi
+                  cpu: 200m
+                requests:
+                  memory: 64Mi
+                  cpu: 50m
