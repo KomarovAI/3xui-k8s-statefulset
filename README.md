@@ -1,136 +1,273 @@
-# 3X-UI VPN Panel - Kubernetes Deployment
+# 3X-UI Docker Image - CI Repository
 
-## ⚡ Быстрый старт за 5 минут
+> **🛠️ CI-ONLY Repository**  
+> This repository builds optimized Docker images for 3X-UI VPN Panel.  
+> Deployment is handled by [k3s-infrastructure](https://github.com/KomarovAI/k3s-infrastructure) via FluxCD.
 
-👉 **[QUICKSTART.md](QUICKSTART.md)** - Полная инструкция от нуля до работающего сайта
+---
+
+## 🎯 Purpose
+
+This repository is responsible for **Continuous Integration (CI)** only:
+
+✅ Build optimized Docker images  
+✅ Security scanning (Trivy + Docker Scout)  
+✅ Push to DockerHub with semantic versioning  
+✅ Auto-update image tags in k3s-infrastructure  
+
+❌ **NO deployment** - handled by FluxCD in k3s-infrastructure
+
+---
+
+## 🚀 Quick Start
+
+### 1. Create a new release
 
 ```bash
-# 1. Склонировать репозиторий
-git clone https://github.com/KomarovAI/3xui-k8s-statefulset.git
-cd 3xui-k8s-statefulset
+# Tag with semantic version
+git tag v1.0.0
+git push origin v1.0.0
+```
 
-# 2. Установить Traefik (один раз)
-chmod +x scripts/install-traefik.sh
-./scripts/install-traefik.sh
+**GitHub Actions will automatically:**
+1. 🛠️ Build multi-stage Docker image
+2. 🔒 Scan for vulnerabilities with Trivy
+3. 📦 Push to DockerHub with multiple tags
+4. 🔄 Update image tag in k3s-infrastructure
+5. 🎉 Create GitHub Release with security report
 
-# 3. Запустить деплой через GitHub Actions
-gh workflow run deploy-dockerhub.yml
+### 2. FluxCD deploys automatically
 
-# 4. Открыть сайт (2-3 минуты на SSL)
-echo "https://xui.$(curl -s ifconfig.me).nip.io"
+FluxCD in k3s-infrastructure will detect the Git change and deploy within 1 minute.
+
+---
+
+## 📚 Repository Structure
+
+```
+3xui-k8s-statefulset/
+├── .github/workflows/
+│   └── build-scan-push.yml      # 🛠️ CI pipeline
+├── scripts/
+│   ├── entrypoint.sh            # Container entrypoint
+│   └── healthcheck.sh           # Health check script
+├── manifests/                   # 📌 Reference manifests only
+│   ├── service.yaml
+│   ├── ingressroute.yaml
+│   └── networkpolicy.yaml
+├── Dockerfile                   # Original Dockerfile
+├── Dockerfile.optimized         # 🔥 Production-ready multi-stage
+├── .dockerignore
+└── README.md
 ```
 
 ---
 
-## ✨ Новые возможности (2025-11-18)
+## 🔥 Dockerfile Features
 
-### 1. ️⚡ Оптимизированные Health Checks
-- **startupProbe** - до 5 минут на первый старт
-- **Увеличенные таймауты** для liveness/readiness
-- **Устранена проблема** с 8 рестартами перед стабилизацией
+### Multi-stage Build
 
-### 2. 🔐 DNS NetworkPolicy
-- Явное разрешение UDP/TCP порт 53
-- Предотвращает блокировку DNS
+```dockerfile
+Stage 1: base      → FROM ghcr.io/mhsanaei/3x-ui:latest
+Stage 2: security  → apk upgrade + cleanup
+Stage 3: runtime   → non-root user + scripts
+```
 
-### 3. 🚪 PodDisruptionBudget
-- Защита от случайного удаления пода
-- Гарантия `minAvailable: 1`
+### Security Hardening
 
-### 4. 🔒 SSL-сертификаты Let's Encrypt
-- Автоматическая выдача через Traefik
-- Email `artur.komarovv@gmail.com` хранится в Secret
-- Редирект HTTP → HTTPS
+✅ **Non-root user** (UID: 2000)  
+✅ **Security updates** (apk upgrade)  
+✅ **Minimal attack surface** (removed unnecessary packages)  
+✅ **Read-only filesystem compatible**  
+✅ **Health checks** built-in  
 
-### 5. 🛠️ Автоматическая установка Traefik
-- Одна команда - полная настройка
-- CRDs, Let's Encrypt, PVC - все автоматически
-- Решение проблемы "Bad Gateway"
+### Optimization
 
----
-
-## 📚 Документация
-
-- **[QUICKSTART.md](QUICKSTART.md)** 🌟 - Быстрый старт за 5 минут
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Полная инструкция по деплою
-- **[CHANGELOG.md](CHANGELOG.md)** - История изменений
-- **[docs/BACKUP_TO_GITHUB.md](docs/BACKUP_TO_GITHUB.md)** - Автоматические бэкапы
-- **[docs/SECURITY.md](docs/SECURITY.md)** - Безопасность CI/CD
-- **[docs/ETCD_ENCRYPTION.md](docs/ETCD_ENCRYPTION.md)** - Шифрование бэкапов
+✅ **Layer caching** for faster builds  
+✅ **BuildKit inline cache**  
+✅ **Cleaned caches** (/tmp, /var/cache)  
+✅ **OCI metadata labels**  
 
 ---
 
-## 🐞 Troubleshooting
+## 🔒 Security Scanning
 
-### 🔴 Проблема: "502 Bad Gateway" или "сайт не открывается"
+### Trivy Vulnerability Scanner
 
-**Причина:** Traefik CRDs не установлены
+**Scans for:**
+- OS vulnerabilities (Alpine packages)
+- Application dependencies
+- Dockerfile misconfigurations
+- Exposed secrets
+
+**Severity levels:** CRITICAL, HIGH, MEDIUM
+
+**Results uploaded to:**
+- 📊 GitHub Security tab (SARIF format)
+- 📄 GitHub Release artifacts (JSON report)
+
+### Docker Scout
+
+**Additional checks:**
+- CVE database analysis
+- Policy compliance
+- Supply chain security
+
+---
+
+## 🏷️ Image Tagging Strategy
+
+### Semantic Versioning
+
+When you push a tag `v1.2.3`, the following Docker tags are created:
+
+```
+artur7892988/3xui-k8s-statefulset:v1.2.3   ← Specific version
+artur7892988/3xui-k8s-statefulset:v1.2     ← Minor version
+artur7892988/3xui-k8s-statefulset:latest   ← Latest release
+```
+
+### Production Recommendation
+
+✅ **Use specific versions** in production:  
+```yaml
+image: artur7892988/3xui-k8s-statefulset:v1.2.3
+```
+
+❌ **Avoid `latest`** in production (unpredictable updates)
+
+---
+
+## 🔄 CI/CD Workflow
+
+### Trigger Conditions
+
+Workflow runs when:
+- ✅ Git tag `v*.*.*` is pushed
+- ✅ `Dockerfile*` is modified
+- ✅ `scripts/**` is modified
+- ✅ Manual trigger via GitHub Actions UI
+
+Workflow **does NOT** run on:
+- ❌ Regular commits to `main` without tags
+- ❌ Documentation changes
+- ❌ Manifest updates
+
+### Pipeline Steps
+
+```mermaid
+graph LR
+    A[Git Tag v1.2.3] --> B[Build Image]
+    B --> C[Trivy Scan]
+    C --> D[Docker Scout]
+    D --> E[Push to DockerHub]
+    E --> F[Update k3s-infrastructure]
+    F --> G[Create GitHub Release]
+```
+
+1. **Checkout** repository
+2. **Generate** Docker metadata (tags, labels)
+3. **Build** multi-stage image with BuildKit
+4. **Scan** with Trivy (CRITICAL/HIGH/MEDIUM)
+5. **Analyze** with Docker Scout
+6. **Push** to DockerHub with multiple tags
+7. **Update** image tag in k3s-infrastructure Git
+8. **Create** GitHub Release with Trivy report
+
+---
+
+## 🔧 Configuration
+
+### Required Secrets
+
+Configure in **Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `DOCKERHUB_USERNAME` | DockerHub username |
+| `DOCKERHUB_TOKEN` | DockerHub access token |
+| `K3S_INFRA_PAT` | GitHub PAT for k3s-infrastructure |
+
+### GitHub PAT Permissions
+
+For `K3S_INFRA_PAT`, create a Personal Access Token with:
+- ✅ `repo` (full control)
+- ✅ `workflow` (update workflows)
+
+---
+
+## 📊 Image Metrics
+
+Each build reports:
+- 📦 **Image size** (MB)
+- 🧱 **Number of layers**
+- 🏷️ **Tags created**
+- 🔐 **Digest** (SHA256)
+- 🔒 **Vulnerabilities** found
+
+View in **GitHub Actions → Build summary**
+
+---
+
+## 🛡️ Health Checks
+
+### Docker HEALTHCHECK
 
 ```bash
-# Решение: установи Traefik
-./scripts/install-traefik.sh
-
-# Проверь, что IngressRoute создан
-kubectl get ingressroute -n xui-vpn
+# Runs every 30s, timeout 10s
+/usr/local/bin/healthcheck.sh
 ```
 
-✅ **Подробнее**: [QUICKSTART.md - Troubleshooting](QUICKSTART.md#-troubleshooting)
+**Checks:**
+1. 3X-UI process is running
+2. HTTP endpoint responds (port 2053)
+3. Data directory exists and is writable
 
-### 🔴 Проблема: Под перезапускается
-✅ **Решено**: Добавлен `startupProbe` + увеличены таймауты
+### Kubernetes Probes
 
-### 🔴 Проблема: SSL не выдается
-```bash
-# Проверь логи Traefik
-kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=50 | grep -i acme
-```
-✅ **Решение**: См. [DEPLOYMENT.md](DEPLOYMENT.md#🐞-решение-проблем)
-
-### 🔴 Проблема: Permission denied
-```bash
-sudo chown -R 2000:2000 /opt/xui-vpn/data
-kubectl delete pod -n xui-vpn -l app=xui-panel
-```
+Compatible with:
+- `startupProbe` (90s grace period)
+- `livenessProbe` (restart on failure)
+- `readinessProbe` (remove from load balancer)
 
 ---
 
-## 🎉 Статус репозитория
+## 📝 Environment Variables
 
-✅ **ГОТОВ К ПРОДАКШНУ!**
-
-Все критические проблемы устранены:
-- ✅ Health checks оптимизированы
-- ✅ DNS NetworkPolicy добавлена
-- ✅ PodDisruptionBudget настроен
-- ✅ Email для Let's Encrypt правильный
-- ✅ CI/CD workflow обновлен
-- ✅ IngressRoute применяется автоматически
-- ✅ **Traefik устанавливается автоматически**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `XUI_DATA_DIR` | `/etc/x-ui` | Data directory path |
+| `XUI_PORT` | `2053` | Application port |
+| `XUI_LOG_LEVEL` | `info` | Logging level |
+| `POD_NAME` | - | Kubernetes pod name (injected) |
+| `POD_NAMESPACE` | - | Kubernetes namespace (injected) |
 
 ---
 
-## 🔧 Архитектура
+## 🔗 Related Repositories
 
-```
-Интернет
-   ↓
-DNS: xui.${SERVER_IP}.nip.io → ${SERVER_IP}
-   ↓
-Traefik (порты 80/443)
-   ↓ Let's Encrypt SSL
-IngressRoute → 3X-UI Service (порт 2053)
-   ↓
-3X-UI StatefulSet
-   ↓
-PersistentVolume (/opt/xui-vpn/data)
-```
+- **[k3s-infrastructure](https://github.com/KomarovAI/k3s-infrastructure)** - GitOps deployment via FluxCD
+- **[3x-ui](https://github.com/MHSanaei/3x-ui)** - Upstream 3X-UI project
 
-### Компоненты
+---
 
-- **StatefulSet** - 3X-UI приложение с RollingUpdate
-- **PersistentVolume** - Local storage на хосте
-- **Service** - ClusterIP для внутренней связи
-- **IngressRoute** - Traefik маршрутизация с SSL
-- **NetworkPolicy** - Безопасность сети + DNS
-- **PodDisruptionBudget** - Защита от eviction
-- **CronJob** - Автоматические бэкапы
+## 📜 License
+
+MIT License - See [LICENSE](LICENSE) for details
+
+---
+
+## 👤 Maintainer
+
+**Artur Komarov**  
+📧 artur.komarovv@gmail.com  
+🐙 [@KomarovAI](https://github.com/KomarovAI)
+
+---
+
+## 🎉 Status
+
+🟢 **Active Development**  
+📦 **DockerHub:** [artur7892988/3xui-k8s-statefulset](https://hub.docker.com/r/artur7892988/3xui-k8s-statefulset)  
+🔒 **Security:** Trivy + Docker Scout scanning enabled  
+🚀 **CI/CD:** Automated builds on Git tags
