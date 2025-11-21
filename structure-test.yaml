@@ -1,0 +1,84 @@
+schemaVersion: '2.0.0'
+
+# File Existence Tests
+fileExistenceTests:
+  - name: 'Essential binaries exist'
+    path: '/usr/bin/x-ui'
+    shouldExist: true
+    permissions: '-rwxr-xr-x'
+  
+  - name: 'App directory exists'
+    path: '/app'
+    shouldExist: true
+    isDirectory: true
+  
+  - name: 'Config directory exists'
+    path: '/app/bin'
+    shouldExist: true
+    isDirectory: true
+  
+  - name: 'Entrypoint script exists'
+    path: '/app/DockerEntrypoint.sh'
+    shouldExist: true
+    permissions: '-rwxr-xr-x'
+
+# File Content Tests
+fileContentTests:
+  - name: 'Verify Alpine version'
+    path: '/etc/os-release'
+    expectedContents: ['Alpine Linux v3.20']
+  
+  - name: 'Timezone data available'
+    path: '/usr/share/zoneinfo/UTC'
+    shouldExist: true
+
+# Command Tests
+commandTests:
+  - name: 'curl is installed and working'
+    command: 'curl'
+    args: ['--version']
+    expectedOutput: ['curl 8.14.1']
+  
+  - name: 'bash is installed'
+    command: 'bash'
+    args: ['--version']
+    expectedOutput: ['GNU bash, version 5.2.37']
+  
+  - name: 'x-ui user exists'
+    command: 'id'
+    args: ['-u', 'x-ui']
+    expectedOutput: ['2000']
+  
+  - name: 'x-ui group exists'
+    command: 'id'
+    args: ['-g', 'x-ui']
+    expectedOutput: ['2000']
+  
+  - name: 'Workdir is /app'
+    command: 'pwd'
+    expectedOutput: ['/app']
+  
+  - name: 'CA certificates are installed'
+    command: 'ls'
+    args: ['/etc/ssl/certs/ca-certificates.crt']
+    shouldExist: true
+
+# Metadata Tests
+metadataTest:
+  env:
+    - key: 'PATH'
+      value: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+  
+  exposedPorts: ['2053', '2096']
+  
+  volumes: ['/etc/x-ui']
+  
+  workdir: '/app'
+  
+  user: 'x-ui'
+  
+  labels:
+    - key: 'maintainer'
+      value: 'KomarovAI'
+    - key: 'version'
+      value: '2.5.3-optimized'
