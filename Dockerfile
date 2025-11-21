@@ -2,7 +2,7 @@
 FROM ghcr.io/mhsanaei/3x-ui:v2.5.3 AS builder
 
 # Stage 2: Runtime
-FROM alpine:3.20
+FROM alpine:3.22
 
 # Build-time arguments (passed from CI/CD)
 ARG BUILD_DATE
