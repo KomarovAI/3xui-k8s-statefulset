@@ -63,7 +63,7 @@ jobs:
           echo "✅ Image validation passed"
       
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: docker-image-${{ github.sha }}
           path: image.tar.gz
@@ -172,7 +172,7 @@ jobs:
       
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: smoke-test-logs-${{ github.sha }}
           path: smoke-test.log
@@ -313,7 +313,7 @@ jobs:
       
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: health-probe-logs-${{ github.sha }}
           path: health-probe*.log

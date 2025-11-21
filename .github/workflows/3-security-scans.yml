@@ -39,7 +39,7 @@ jobs:
           key: security-scan-image-${{ github.event.workflow_run.head_sha }}
       
       - name: Upload for parallel jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: security-scan-image
           path: image.tar.gz
@@ -92,7 +92,7 @@ jobs:
             ${{ env.IMAGE_NAME }} | tee trivy-output.txt
       
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: trivy-results-${{ github.event.workflow_run.head_sha }}
           path: trivy-*.*
@@ -133,7 +133,7 @@ jobs:
             --output table | tee grype-output.txt || true
       
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: grype-results-${{ github.event.workflow_run.head_sha }}
           path: grype-*.*
@@ -170,7 +170,7 @@ jobs:
           dockle ${{ env.IMAGE_NAME }} | tee dockle-output.txt || true
       
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: dockle-results-${{ github.event.workflow_run.head_sha }}
           path: dockle-*.*
@@ -207,7 +207,7 @@ jobs:
           syft ${{ env.IMAGE_NAME }} -o table | tee sbom-output.txt || true
       
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sbom-${{ github.event.workflow_run.head_sha }}
           path: sbom*.*

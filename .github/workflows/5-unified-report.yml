@@ -97,7 +97,7 @@ jobs:
           echo "🔗 [View Full Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }})" >> UNIFIED_REPORT.md
       
       - name: Upload unified report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: UNIFIED_REPORT-${{ github.event.workflow_run.head_sha }}
           path: UNIFIED_REPORT.md

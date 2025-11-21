@@ -65,7 +65,7 @@ jobs:
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: hadolint-results-${{ github.sha }}
           path: |
@@ -106,7 +106,7 @@ jobs:
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: kubescore-results-${{ github.sha }}
           path: kubescore-output.txt
@@ -146,7 +146,7 @@ jobs:
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: kubeconform-results-${{ github.sha }}
           path: kubeconform-output.txt
@@ -184,7 +184,7 @@ jobs:
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: polaris-results-${{ github.sha }}
           path: polaris-output.txt
@@ -224,7 +224,7 @@ jobs:
       
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: conftest-results-${{ github.sha }}
           path: conftest-output.txt
