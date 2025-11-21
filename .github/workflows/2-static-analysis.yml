@@ -1,0 +1,249 @@
+name: "📊 Static Analysis & Best Practices"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  HADOLINT_VERSION: 2.12.0
+  KUBESCORE_VERSION: 1.18.0
+  KUBECONFORM_VERSION: 0.6.4
+  POLARIS_VERSION: 8.5.0
+  CONFTEST_VERSION: 0.49.0
+
+jobs:
+  # ============================================
+  # HADOLINT - Dockerfile Linting
+  # ============================================
+  hadolint-lint:
+    name: 'Hadolint - Dockerfile Quality'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Hadolint
+        uses: actions/cache@v4
+        id: cache-hadolint
+        with:
+          path: /usr/local/bin/hadolint
+          key: hadolint-${{ env.HADOLINT_VERSION }}
+      
+      - name: Install Hadolint
+        if: steps.cache-hadolint.outputs.cache-hit != 'true'
+        run: |
+          wget -O hadolint https://github.com/hadolint/hadolint/releases/download/v${{ env.HADOLINT_VERSION }}/hadolint-Linux-x86_64
+          chmod +x hadolint
+          sudo mv hadolint /usr/local/bin/
+      
+      - name: Run Hadolint
+        run: |
+          hadolint Dockerfile --format json > hadolint-report.json || true
+          hadolint Dockerfile > hadolint-output.txt || true
+          cat hadolint-output.txt
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: hadolint-results-${{ github.sha }}
+          path: hadolint-*.* 
+          retention-days: 30
+
+  # ============================================
+  # KUBE-SCORE - Kubernetes Best Practices
+  # ============================================
+  kube-score:
+    name: 'Kube-Score - K8s Quality'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache kube-score
+        uses: actions/cache@v4
+        id: cache-kubescore
+        with:
+          path: /usr/local/bin/kube-score
+          key: kubescore-${{ env.KUBESCORE_VERSION }}
+      
+      - name: Install kube-score
+        if: steps.cache-kubescore.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/zegl/kube-score/releases/download/v${{ env.KUBESCORE_VERSION }}/kube-score_${{ env.KUBESCORE_VERSION }}_linux_amd64.tar.gz
+          tar -xzf kube-score_${{ env.KUBESCORE_VERSION }}_linux_amd64.tar.gz
+          sudo mv kube-score /usr/local/bin/
+      
+      - name: Run kube-score
+        run: |
+          if [ -d "manifests" ]; then
+            kube-score score manifests/*.yaml --output-format ci > kubescore-output.txt || true
+            cat kubescore-output.txt
+          else
+            echo "No manifests directory found" > kubescore-output.txt
+          fi
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubescore-results-${{ github.sha }}
+          path: kubescore-output.txt
+          retention-days: 30
+
+  # ============================================
+  # KUBECONFORM - YAML Validation
+  # ============================================
+  kubeconform-validate:
+    name: 'Kubeconform - YAML Schema'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Kubeconform
+        uses: actions/cache@v4
+        id: cache-kubeconform
+        with:
+          path: /usr/local/bin/kubeconform
+          key: kubeconform-${{ env.KUBECONFORM_VERSION }}
+      
+      - name: Install Kubeconform
+        if: steps.cache-kubeconform.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/yannh/kubeconform/releases/download/v${{ env.KUBECONFORM_VERSION }}/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform-linux-amd64.tar.gz
+          chmod +x kubeconform
+          sudo mv kubeconform /usr/local/bin/
+      
+      - name: Validate manifests
+        run: |
+          if [ -d "manifests" ]; then
+            kubeconform -strict -summary manifests/*.yaml > kubeconform-output.txt || true
+            cat kubeconform-output.txt
+          else
+            echo "No manifests directory found" > kubeconform-output.txt
+          fi
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconform-results-${{ github.sha }}
+          path: kubeconform-output.txt
+          retention-days: 30
+
+  # ============================================
+  # POLARIS - Policy Enforcement
+  # ============================================
+  polaris-score:
+    name: 'Polaris - Policy Check'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Polaris
+        uses: actions/cache@v4
+        id: cache-polaris
+        with:
+          path: /usr/local/bin/polaris
+          key: polaris-${{ env.POLARIS_VERSION }}
+      
+      - name: Install Polaris
+        if: steps.cache-polaris.outputs.cache-hit != 'true'
+        run: |
+          wget -O- https://github.com/FairwindsOps/polaris/releases/download/${{ env.POLARIS_VERSION }}/polaris_linux_amd64.tar.gz | tar xz
+          sudo mv polaris /usr/local/bin/
+      
+      - name: Run Polaris
+        run: |
+          if [ -d "manifests" ]; then
+            polaris audit --audit-path manifests --format pretty > polaris-output.txt || true
+            cat polaris-output.txt
+          else
+            echo "No manifests directory found" > polaris-output.txt
+          fi
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-results-${{ github.sha }}
+          path: polaris-output.txt
+          retention-days: 30
+
+  # ============================================
+  # CONFTEST - OPA Policy
+  # ============================================
+  conftest-policy:
+    name: 'Conftest - OPA Validation'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Cache Conftest
+        uses: actions/cache@v4
+        id: cache-conftest
+        with:
+          path: /usr/local/bin/conftest
+          key: conftest-${{ env.CONFTEST_VERSION }}
+      
+      - name: Install Conftest
+        if: steps.cache-conftest.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/open-policy-agent/conftest/releases/download/v${{ env.CONFTEST_VERSION }}/conftest_${{ env.CONFTEST_VERSION }}_Linux_x86_64.tar.gz
+          tar -xzf conftest_${{ env.CONFTEST_VERSION }}_Linux_x86_64.tar.gz
+          chmod +x conftest
+          sudo mv conftest /usr/local/bin/
+      
+      - name: Run Conftest
+        run: |
+          if [ -d "policies" ] && [ -d "manifests" ]; then
+            conftest test manifests/*.yaml > conftest-output.txt || true
+            cat conftest-output.txt
+          else
+            echo "No policies or manifests directory found" > conftest-output.txt
+          fi
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: conftest-results-${{ github.sha }}
+          path: conftest-output.txt
+          retention-days: 30
+
+  # ============================================
+  # STATIC ANALYSIS SUMMARY
+  # ============================================
+  static-analysis-summary:
+    name: '📊 Static Analysis Summary'
+    needs: [hadolint-lint, kube-score, kubeconform-validate, polaris-score, conftest-policy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+      
+      - name: Generate summary
+        run: |
+          echo "# 📊 Static Analysis Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for job in hadolint kubescore kubeconform polaris conftest; do
+            status="${{ needs[job].result }}"
+            if [ "$status" = "success" ]; then
+              echo "| $job | ✅ PASSED |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $job | ⚠️  WARNINGS |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "💡 These checks are **non-blocking** but should be reviewed." >> $GITHUB_STEP_SUMMARY
