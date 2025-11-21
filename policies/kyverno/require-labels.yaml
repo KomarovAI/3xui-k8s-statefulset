@@ -1,0 +1,31 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels
+  annotations:
+    policies.kyverno.io/title: Require Common Labels
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: Pod, Deployment
+    policies.kyverno.io/description: >-
+      Define and use common labels that identify application metadata.
+      Recommended labels: app, version, component, part-of, managed-by.
+spec:
+  validationFailureAction: audit
+  background: true
+  rules:
+  - name: check-for-labels
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+          - Deployment
+          - StatefulSet
+          - DaemonSet
+    validate:
+      message: "The label 'app' is required for all workloads."
+      pattern:
+        metadata:
+          labels:
+            app: "?*"
