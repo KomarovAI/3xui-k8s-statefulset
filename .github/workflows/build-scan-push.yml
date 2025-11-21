@@ -1,40 +1,152 @@
-name: 🚀 Build, Scan & Push Docker Image
+name: 🚀 Build, Validate & Push
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Docker image tag (optional, auto-generated if empty)'
+        description: 'Docker image tag (optional)'
         required: false
         type: string
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
     paths:
       - 'Dockerfile*'
       - 'scripts/**'
       - '.dockerignore'
+  pull_request:
+    paths:
+      - 'Dockerfile*'
+      - 'scripts/**'
 
 env:
   REGISTRY: docker.io
   IMAGE_NAME: artur7892988/3xui-k8s-statefulset
 
 jobs:
-  build-scan-push:
-    name: 🛠️ Build, Scan & Push
+  # Этап 1: Линтинг Dockerfile
+  lint:
+    name: 🔍 Lint Dockerfile
     runs-on: ubuntu-latest
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🕵️‍♂️ Hadolint - Dockerfile linter
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+  # Этап 2: Тестовая сборка и валидация
+  build-and-test:
+    name: 🛠️ Build & Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🛠️ Build test image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: ⚙️ Test container startup
+        run: |
+          echo "🚀 Testing container startup..."
+          docker run -d --name test-container \
+            -e XUI_ENABLE_FAIL2BAN=false \
+            ${{ env.IMAGE_NAME }}:test
+          
+          sleep 10
+          
+          if docker ps | grep test-container; then
+            echo "✅ Container started successfully"
+            docker logs test-container
+          else
+            echo "❌ Container failed to start"
+            docker logs test-container
+            exit 1
+          fi
+          
+          docker stop test-container
+          docker rm test-container
+
+      - name: 🔍 Inspect image structure
+        run: |
+          echo "## 📦 Image Structure" >> $GITHUB_STEP_SUMMARY
+          docker run --rm ${{ env.IMAGE_NAME }}:test ls -la /app/bin/ >> $GITHUB_STEP_SUMMARY || echo "bin/ not found" >> $GITHUB_STEP_SUMMARY
+          docker run --rm ${{ env.IMAGE_NAME }}:test cat /app/bin/config.json >> $GITHUB_STEP_SUMMARY || echo "config.json missing" >> $GITHUB_STEP_SUMMARY
+
+  # Этап 3: Сканирование безопасности
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🛠️ Build image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:scan
+          cache-from: type=gha
+
+      - name: 🔒 Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:scan
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Блокируем при критичных CVE
+
+      - name: 🔒 Dockle - Docker best practices
+        uses: erzz/dockle-action@v1
+        with:
+          image: ${{ env.IMAGE_NAME }}:scan
+          exit-code: '0'
+          exit-level: warn
+
+  # Этап 4: Пуш в Docker Hub (только после всех проверок!)
+  push:
+    name: 📤 Push to Docker Hub
+    runs-on: ubuntu-latest
+    needs: [lint, build-and-test, security-scan]
+    if: github.event_name != 'pull_request'
     permissions:
       contents: write
       security-events: write
-      packages: write
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: 📁 Checkout repository
+      - name: 📁 Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: 🏷️ Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -44,71 +156,42 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
           labels: |
             org.opencontainers.image.title=3X-UI VPN Panel
             org.opencontainers.image.description=Production-ready 3X-UI for Kubernetes
             org.opencontainers.image.vendor=KomarovAI
-            maintainer=artur.komarovv@gmail.com
-      - name: 🐳 Set up QEMU
-        uses: docker/setup-qemu-action@v3
+
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            image=moby/buildkit:v0.12.5
-            network=host
+
       - name: 🔐 Login to DockerHub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: 🛠️ Build and push Docker image
+
+      - name: 🚀 Build and push
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.optimized
+          file: ./Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: false
-          sbom: false
-      - name: 🔒 Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '0'
-      - name: 📊 Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-      - name: 🔒 Trivy JSON report
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'json'
-          output: 'trivy-report.json'
-      - name: 📎 Upload Trivy JSON
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: trivy-report
-          path: trivy-report.json
-      - name: 🔍 Analyze image size
+
+      - name: 📊 Image analysis
         run: |
-          docker pull ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          SIZE=$(docker inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} --format='{{.Size}}' | numfmt --to=iec-i --suffix=B)
-          LAYERS=$(docker inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} --format='{{len .RootFS.Layers}}')
-          echo "## 📦 Image Analysis" >> $GITHUB_STEP_SUMMARY
+          docker pull ${{ env.IMAGE_NAME }}:latest
+          SIZE=$(docker inspect ${{ env.IMAGE_NAME }}:latest --format='{{.Size}}' | numfmt --to=iec-i --suffix=B)
+          LAYERS=$(docker inspect ${{ env.IMAGE_NAME }}:latest --format='{{len .RootFS.Layers}}')
+          
+          echo "## 📦 Image Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -116,31 +199,18 @@ jobs:
           echo "| **Layers** | $LAYERS |" >> $GITHUB_STEP_SUMMARY
           echo "| **Tags** | ${{ steps.meta.outputs.tags }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Digest** | ${{ steps.build.outputs.digest }} |" >> $GITHUB_STEP_SUMMARY
-      - name: 🔍 Docker Scout CVEs
-        uses: docker/scout-action@v1
-        if: github.event_name != 'pull_request'
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **All validation checks passed!**" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🔒 Final security report
+        uses: aquasecurity/trivy-action@master
         with:
-          command: cves
-          image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          only-severities: critical,high
-          exit-code: false
-      - name: 🎉 Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+          image-ref: ${{ env.IMAGE_NAME }}:latest
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: 📄 Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
         with:
-          name: Release ${{ steps.meta.outputs.version }}
-          body: |
-            ## 🚀 Docker Image
-            ```bash
-            docker pull ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-            ```
-            **Tags:**
-            ${{ steps.meta.outputs.tags }}
-            **Digest:**
-            `${{ steps.build.outputs.digest }}`
-            ## 🔒 Security Scan
-            See attached Trivy report for vulnerability details.
-            ## 🔄 Deployment
-            FluxCD will automatically deploy this version to the cluster within 1 minute.
-          files: |
-            trivy-report.json
+          sarif_file: 'trivy-results.sarif'
