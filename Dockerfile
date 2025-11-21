@@ -19,20 +19,17 @@ RUN apk add --no-cache \
 RUN addgroup -g 2000 x-ui && \
     adduser -D -u 2000 -G x-ui x-ui
 
-RUN mkdir -p /etc/x-ui /app /app/bin && \
-    chown -R x-ui:x-ui /etc/x-ui /app
+RUN mkdir -p /app /app/bin && \
+    chown -R x-ui:x-ui /app
 
-# Копируем приложение и все его зависимости
+# Копируем из builder и обязательно кладём bin/ внутри образа
 COPY --from=builder --chown=x-ui:x-ui /app/ /app/
 COPY --from=builder --chown=x-ui:x-ui /usr/bin/x-ui /usr/bin/x-ui
-
-# КРИТИЧЕСКИ ВАЖНО: копируем xray-core бинарники из оригинального образа
 COPY --from=builder --chown=x-ui:x-ui /usr/local/x-ui/bin/ /app/bin/
 
-# Устанавливаем права на исполнение для всех бинарников
-RUN chmod +x /app/x-ui /usr/bin/x-ui 2>/dev/null || true && \
-    chmod +x /app/bin/xray-linux-* 2>/dev/null || true && \
-    chown -R x-ui:x-ui /app
+# Здесь создаём минимальный config.json, если его не было
+RUN test -f /app/bin/config.json || echo '{"log":{"level":"info"},"inbounds":[],"outbounds":[]}' > /app/bin/config.json
+RUN chmod 777 /app/bin && chmod 666 /app/bin/config.json
 
 WORKDIR /app
 VOLUME ["/etc/x-ui"]
