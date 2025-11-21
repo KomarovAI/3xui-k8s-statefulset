@@ -1,8 +1,11 @@
 # 3X-UI VPN Panel on Kubernetes
 
-[![Build, Validate & Push](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/build-scan-push.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/build-scan-push.yml)
-[![Kubernetes Integration Test](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/k8s-integration-test.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/k8s-integration-test.yml)
+[![Critical Path](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/1-build-critical.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/1-build-critical.yml)
+[![Static Analysis](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/2-static-analysis.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/2-static-analysis.yml)
+[![Security Scans](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/3-security-scans.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/3-security-scans.yml)
+[![Docker Publish](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/6-docker-publish.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/6-docker-publish.yml)
 [![Docker Pulls](https://img.shields.io/docker/pulls/artur7892988/3xui-k8s-statefulset)](https://hub.docker.com/r/artur7892988/3xui-k8s-statefulset)
+[![GitHub Release](https://img.shields.io/github/v/release/KomarovAI/3xui-k8s-statefulset)](https://github.com/KomarovAI/3xui-k8s-statefulset/releases)
 
 > Production-ready 3X-UI VPN panel Docker image optimized for Kubernetes StatefulSet deployments
 
@@ -38,6 +41,58 @@
 - **💨 Lightweight**: Alpine-based multi-stage build (~200MB)
 - **🐳 Production-ready**: Liveness/Readiness probes, proper signal handling
 - **🧪 Fully tested**: Docker + Kubernetes integration tests
+- **🌍 Multi-arch**: Supports linux/amd64 and linux/arm64
+
+---
+
+## 📦 Versioning & Releases
+
+This project follows [Semantic Versioning](https://semver.org/):
+
+- **MAJOR** (v3.0.0): Breaking changes
+- **MINOR** (v2.6.0): New features (backward compatible)
+- **PATCH** (v2.5.4): Bug fixes and improvements
+
+### Using Specific Versions
+
+```yaml
+# ✅ PRODUCTION: Always use specific version tags
+image: artur7892988/3xui-k8s-statefulset:v2.5.3
+
+# ⚠️ DEVELOPMENT: Latest may change unexpectedly
+image: artur7892988/3xui-k8s-statefulset:latest
+
+# 🔒 PINNING: Use major.minor for auto-patches
+image: artur7892988/3xui-k8s-statefulset:2.5
+```
+
+### Multi-Arch Support
+
+All images are built for multiple architectures:
+
+- ✅ **linux/amd64** - Standard x86_64 servers
+- ✅ **linux/arm64** - ARM-based servers (AWS Graviton, Raspberry Pi 4+)
+
+```bash
+# Docker automatically pulls the correct architecture
+docker pull artur7892988/3xui-k8s-statefulset:v2.5.3
+```
+
+### Release Process
+
+1. **Automated Testing**: All changes on `main` trigger full CI/CD pipeline
+2. **Manual Release**: Maintainer triggers release via GitHub Actions
+3. **Automated Publishing**: Docker images published to Docker Hub with multiple tags
+4. **GitHub Release**: Changelog auto-generated and release created
+
+**Creating a Release** (Maintainers only):
+
+```bash
+# GitHub Actions UI -> "7-release-automation" workflow
+# Input version: v2.5.4
+# Select release type: patch/minor/major
+# -> Creates tag, release, and triggers Docker publish
+```
 
 ---
 
@@ -52,6 +107,7 @@ Our CI/CD pipeline implements **4-tier testing** to ensure production readiness:
 │  1. STATIC ANALYSIS                           │
 │  - Hadolint (Dockerfile linting)              │
 │  - container-structure-test (file structure)  │
+│  - Kubeconform (K8s YAML validation)          │
 └─────────────────────────────────────────────┘
            │
            │
@@ -77,8 +133,9 @@ Our CI/CD pipeline implements **4-tier testing** to ensure production readiness:
 ┌─────────────────────────────────────────────┐
 │  4. SECURITY SCANNING                         │
 │  - Trivy (CVE detection)                      │
+│  - Grype (Vulnerability analysis)             │
 │  - Dockle (Docker best practices)             │
-│  - SARIF upload to GitHub Security            │
+│  - Syft (SBOM generation)                     │
 └─────────────────────────────────────────────┘
 ```
 
@@ -112,11 +169,19 @@ Standard Docker tests **don't catch K8s-specific issues**:
 ### Docker
 
 ```bash
+# Latest version (development)
 docker run -d \
   -p 2053:2053 \
   -p 2096:2096 \
   -v /path/to/data:/etc/x-ui \
   artur7892988/3xui-k8s-statefulset:latest
+
+# Specific version (production recommended)
+docker run -d \
+  -p 2053:2053 \
+  -p 2096:2096 \
+  -v /path/to/data:/etc/x-ui \
+  artur7892988/3xui-k8s-statefulset:v2.5.3
 ```
 
 ### Kubernetes (K3s/K8s)
@@ -141,10 +206,12 @@ spec:
         fsGroup: 2000
       containers:
       - name: xui
-        image: artur7892988/3xui-k8s-statefulset:latest
+        image: artur7892988/3xui-k8s-statefulset:v2.5.3  # 🔒 Pin to specific version
         ports:
         - containerPort: 2053
+          name: http
         - containerPort: 2096
+          name: secondary
         livenessProbe:
           httpGet:
             path: /
@@ -164,6 +231,13 @@ spec:
           runAsUser: 2000
           runAsGroup: 2000
           allowPrivilegeEscalation: false
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
   volumeClaimTemplates:
   - metadata:
       name: data
@@ -229,8 +303,12 @@ kind create cluster --name test-cluster
 docker build -t test-image:local .
 kind load docker-image test-image:local --name test-cluster
 
-# Deploy and test (see .github/workflows/k8s-integration-test.yml)
+# Deploy and test
 kubectl apply -f <your-manifests>
+kubectl wait --for=condition=Ready pod -l app=xui --timeout=120s
+
+# Cleanup
+kind delete cluster --name test-cluster
 ```
 
 ---
@@ -240,6 +318,7 @@ kubectl apply -f <your-manifests>
 - [Dockerfile Best Practices](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/)
 - [Kubernetes StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)
 - [3X-UI Official Repo](https://github.com/MHSanaei/3x-ui)
+- [Semantic Versioning](https://semver.org/)
 
 ---
 
@@ -260,6 +339,7 @@ MIT License - see [LICENSE](LICENSE) for details
 
 - 🐛 **Issues**: [GitHub Issues](https://github.com/KomarovAI/3xui-k8s-statefulset/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/KomarovAI/3xui-k8s-statefulset/discussions)
+- 📦 **Docker Hub**: [artur7892988/3xui-k8s-statefulset](https://hub.docker.com/r/artur7892988/3xui-k8s-statefulset)
 
 ---
 
