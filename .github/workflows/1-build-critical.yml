@@ -11,6 +11,9 @@ concurrency:
   group: critical-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   IMAGE_NAME: test-image:local
 
@@ -24,30 +27,28 @@ jobs:
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v6
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      - name: Harden Runner
+        uses: step-security/harden-runner@0080882f6c36860b6ba35c610c98ce87d4e2f26f # v2.10.2
         with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
       - name: Build Docker image
         id: build
         timeout-minutes: 15
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
         with:
           context: .
           tags: ${{ env.IMAGE_NAME }}
           outputs: type=docker,dest=/tmp/image.tar
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
-      - name: Rotate cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Compress & validate image
         run: |
           gzip -c /tmp/image.tar > image.tar.gz
@@ -56,17 +57,14 @@ jobs:
           [ "$SIZE" -lt 1000000 ] && echo "❌ Image too small" && exit 1
           gzip -t image.tar.gz || { echo "❌ Corrupted archive"; exit 1; }
           echo "✅ Image validation passed"
+
       - name: Upload image artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
         with:
           name: docker-image-${{ github.sha }}
           path: image.tar.gz
           retention-days: 7
-      - name: Cache image for other workflows
-        uses: actions/cache@v4
-        with:
-          path: image.tar.gz
-          key: docker-image-${{ github.sha }}
+          compression-level: 0
 
   smoke-test:
     name: '🔥 Smoke Tests'
@@ -76,12 +74,20 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - name: Harden Runner
+        uses: step-security/harden-runner@0080882f6c36860b6ba35c610c98ce87d4e2f26f # v2.10.2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Download Docker image
         timeout-minutes: 3
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: docker-image-${{ github.sha }}
+
       - name: Load & run container with dynamic ports
         run: |
           gunzip -c image.tar.gz | docker load
@@ -95,6 +101,11 @@ jobs:
             --health-interval=5s \
             --health-timeout=3s \
             --health-retries=3 \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=100m \
+            --security-opt=no-new-privileges:true \
+            --cap-drop=ALL \
+            --cap-add=NET_BIND_SERVICE \
             ${{ env.IMAGE_NAME }}
           timeout 60 sh -c 'until docker inspect --format="{{.State.Health.Status}}" smoke-test-${{ github.run_id }} | grep -q healthy; do sleep 2; done'
           sleep 5
@@ -103,6 +114,7 @@ jobs:
           echo "PRIMARY_PORT=${PRIMARY_PORT}" >> $GITHUB_ENV
           echo "SECONDARY_PORT=${SECONDARY_PORT}" >> $GITHUB_ENV
           echo "🔌 Ports: $PRIMARY_PORT, $SECONDARY_PORT"
+
       - name: Run smoke tests
         timeout-minutes: 3
         run: |
@@ -124,42 +136,23 @@ jobs:
           # Test 6: Ownership
           OWNER=$(docker exec smoke-test-${{ github.run_id }} stat -c '%U:%G' /etc/x-ui 2>/dev/null)
           [ "$OWNER" = "x-ui:x-ui" ] || { echo "❌ Wrong ownership: $OWNER"; EXIT_CODE=1; }
+          # Test 7: Security - Read-only rootfs
+          docker inspect smoke-test-${{ github.run_id }} --format='{{.HostConfig.ReadonlyRootfs}}' | grep -q true || { echo "❌ Root filesystem not read-only"; EXIT_CODE=1; }
           [ $EXIT_CODE -eq 0 ] && echo "🎉 All smoke tests passed!"
           exit $EXIT_CODE
-      - name: Export smoke tests result as JUnit XML
-        if: always()
-        run: |
-          mkdir -p ctrf
-          # Simple way to create a JUnit XML (simulate/pass/fail)
-          # СИЛЬНО упростим: считаем что 0 - pass, !=0 - fail
-          STATUS=$?
-          TS=$(date +%s)
-          cat > ctrf/smoke-junit.xml <<EOF
-          <testsuite name="smoke" tests="1" failures="$([ "$STATUS" -eq 0 ] && echo 0 || echo 1)" errors="0" skipped="0" timestamp="$TS">
-            <testcase classname="smoke" name="smoke-test" time="1">
-              $([ "$STATUS" -eq 0 ] && echo "" || echo "<failure>Failed smoke test</failure>")
-            </testcase>
-          </testsuite>
-          EOF
-      - name: Convert JUnit XML to CTRF JSON
-        if: always()
-        run: |
-          npx ctrf-converter junit --input=ctrf/smoke-junit.xml --output=ctrf/smoke.json
-      - name: Upload CTRF test report artifact
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: ctrf-smoke-test
-          path: ctrf/*.json
+
       - name: Export logs
         if: always()
         run: docker logs smoke-test-${{ github.run_id }} > smoke-test.log 2>&1 || true
+
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
         with:
           name: smoke-test-logs-${{ github.sha }}
           path: smoke-test.log
+          retention-days: 14
+
       - name: Cleanup
         if: always()
         run: |
@@ -175,44 +168,162 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - name: Harden Runner
+        uses: step-security/harden-runner@0080882f6c36860b6ba35c610c98ce87d4e2f26f # v2.10.2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Cache KIND binary
-        uses: actions/cache@v4
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
         id: cache-kind
         with:
           path: /usr/local/bin/kind
-          key: ${{ runner.os }}-kind-v0.20.0
-      - name: Install KIND
+          key: ${{ runner.os }}-kind-v0.20.0-sha256
+
+      - name: Install KIND with checksum validation
         if: steps.cache-kind.outputs.cache-hit != 'true'
         run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          KIND_VERSION="0.20.0"
+          KIND_CHECKSUM="513a7213d6c040e2f091def3558a5bf65481a8dfd8e01b8a4f4d5ba6752f0047"
+          
+          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_CHECKSUM}  kind" | sha256sum --check --strict || exit 1
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
-      - name: Create KIND cluster
+          echo "✅ KIND installed and validated"
+
+      - name: Create KIND cluster with PodSecurity
         timeout-minutes: 3
         run: |
           CLUSTER_NAME="probe-${{ github.run_id }}"
-          kind create cluster --name $CLUSTER_NAME --wait 2m
+          kind create cluster --name $CLUSTER_NAME --wait 2m \
+            --config - <<EOF
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+          - role: control-plane
+            kubeadmConfigPatches:
+            - |
+              kind: ClusterConfiguration
+              apiServer:
+                extraArgs:
+                  "enable-admission-plugins": "NodeRestriction,PodSecurity"
+          EOF
+
       - name: Download & load image
         timeout-minutes: 3
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: docker-image-${{ github.sha }}
+
       - name: Load image into KIND
         run: |
           gunzip -c image.tar.gz | docker load
           kind load docker-image ${{ env.IMAGE_NAME }} --name probe-${{ github.run_id }}
-      - name: Deploy pod with health probes
+
+      - name: Deploy pod with health probes and security context
         run: |
           kubectl create namespace probe-test
+          kubectl label namespace probe-test pod-security.kubernetes.io/enforce=restricted
           kubectl apply -f - <<EOF
-          ...
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: xui-probe-test
+            namespace: probe-test
+            labels:
+              app: xui
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 2000
+              runAsGroup: 2000
+              fsGroup: 2000
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: xui
+              image: ${{ env.IMAGE_NAME }}
+              imagePullPolicy: Never
+              ports:
+              - containerPort: 2053
+                name: http
+              - containerPort: 2096
+                name: secondary
+              livenessProbe:
+                httpGet:
+                  path: /
+                  port: 2053
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: 2053
+                initialDelaySeconds: 10
+                periodSeconds: 5
+                timeoutSeconds: 3
+                failureThreshold: 3
+              volumeMounts:
+              - name: data
+                mountPath: /etc/x-ui
+              - name: tmp
+                mountPath: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop:
+                  - ALL
+                  add:
+                  - NET_BIND_SERVICE
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+            volumes:
+            - name: data
+              emptyDir: {}
+            - name: tmp
+              emptyDir: {}
           EOF
-      # остался блок без тестов — добавить, если будут JUnit-конвертируемые integration-тесты или bash2junit/tap2junit
+          
+          kubectl wait --for=condition=Ready pod/xui-probe-test -n probe-test --timeout=120s
+          echo "✅ Pod is ready with all probes passing!"
+
+      - name: Verify probes and security
+        run: |
+          echo "=== Pod Description ==="
+          kubectl describe pod xui-probe-test -n probe-test
+          
+          echo "
+=== Security Context Validation ==="
+          kubectl get pod xui-probe-test -n probe-test -o jsonpath='{.spec.securityContext}' | jq .
+          kubectl get pod xui-probe-test -n probe-test -o jsonpath='{.spec.containers[0].securityContext}' | jq .
+          
+          echo "
+=== Container Logs ==="
+          kubectl logs xui-probe-test -n probe-test --tail=50
+
+      - name: Cleanup
+        if: always()
+        run: kind delete cluster --name probe-${{ github.run_id }}
+
   critical-summary:
     name: '✅ Critical Path Status'
     needs: [smoke-test, health-probes-test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: always()
     steps:
       - name: Check critical failures
