@@ -7,8 +7,6 @@ FROM alpine:3.20
 LABEL maintainer="KomarovAI"
 LABEL version="2.5.3-optimized"
 
-# Pin package versions for reproducible builds and security compliance
-# Versions verified for Alpine 3.20 x86_64 main repository as of 2025-11-21
 RUN apk add --no-cache \
     ca-certificates=20250911-r0 \
     tzdata=2025b-r0 \
@@ -21,16 +19,12 @@ RUN apk add --no-cache \
 RUN addgroup -g 2000 x-ui && \
     adduser -D -u 2000 -G x-ui x-ui
 
-RUN mkdir -p /app /app/bin && \
-    chown -R x-ui:x-ui /app
+RUN mkdir -p /app /etc/x-ui && \
+    chown -R x-ui:x-ui /app /etc/x-ui && \
+    chmod 755 /etc/x-ui
 
-# Копируем из builder
 COPY --from=builder --chown=x-ui:x-ui /app/ /app/
 COPY --from=builder --chown=x-ui:x-ui /usr/bin/x-ui /usr/bin/x-ui
-
-# Здесь создаём минимальный config.json, если его не было
-RUN test -f /app/bin/config.json || echo '{"log":{"level":"info"},"inbounds":[],"outbounds":[]}' > /app/bin/config.json
-RUN chmod 777 /app/bin && chmod 666 /app/bin/config.json
 
 WORKDIR /app
 VOLUME ["/etc/x-ui"]
