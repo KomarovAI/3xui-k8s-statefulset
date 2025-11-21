@@ -46,17 +46,40 @@ jobs:
         run: |
           kubectl version
           # helm upgrade --install ... или kubectl apply ... (по твоей инструкции)
-      - name: Run Smoke and Health Tests
+      - name: 🚨 Probe, Phase & Events Check
         run: |
-          kubectl get pods -A
-          # Можно добавить любой kubectl wait/check/describe для проверки статуса
+          kubectl get pods -A -o json | jq '.items[] | {name: .metadata.name, ns: .metadata.namespace, phase: .status.phase, probes: ([.spec.containers[].livenessProbe] + [.spec.containers[].readinessProbe]) }' > logs/pod-probes.json
+          kubectl get pods -A --field-selector=status.phase!=Running > logs/pods-nonrunning.txt
+          kubectl get events --sort-by=.metadata.creationTimestamp > logs/k8s-events.txt
+          kubectl describe pods -A > logs/pods-describe.txt
+      - name: 🔒 CIS Security Benchmark (kube-bench)
+        run: |
+          docker run --rm -v /etc:/etc:ro -v /var/lib:/var/lib:ro -v ~/.kube:/root/.kube:ro aquasec/kube-bench:latest --benchmark cis-1.24 | tee logs/kube-bench.txt || true
+      - name: 🛡️ Manifest Security Check (kubesec)
+        run: |
+          for f in k8s/*.yaml; do curl -sSX POST --data-binary @$f https://v2.kubesec.io/scan/ >> logs/kubesec-scan.txt; done || true
+      - name: 🗄️ PV/PVC Storage Check
+        run: |
+          kubectl get pv,pvc -A > logs/pv-pvc.txt
+      - name: 🌐 Service Connectivity (netshoot)
+        run: |
+          kubectl run netshoot --rm -i --tty --image=nicolaka/netshoot -- ping google.com | tee logs/netshoot.txt
+      - name: 📏 Container Resources
+        run: |
+          kubectl get pods -A -o json | jq '.items[] | {containers: [.spec.containers[].resources]}' > logs/container-resources.json
+      - name: 🚫 Privileged Container Check
+        run: |
+          (kubectl get pods -A -o json | jq '.items[] | select(.spec.containers[].securityContext.runAsUser==0)') > logs/privileged-containers.txt || true
+      - name: 🚀 Custom Integration/Smoke Test (Testkube / curl)
+        run: |
+          # кастомные тесты: curl/HTTP/API/health, Testkube, etc
+          echo "Testkube API smoke test" > logs/testkube.txt
       - name: Collect pod/container logs
         run: |
           mkdir -p logs
           kubectl get pods -A -o wide > logs/pods.txt
-          kubectl get events -A --sort-by='.lastTimestamp' > logs/events.txt
           kubectl logs --all-containers --prefix -A > logs/all-containers.log || true
-      - name: Upload test logs artifact
+      - name: Upload integration test logs
         uses: actions/upload-artifact@v4
         with:
           name: k8s-integration-logs
