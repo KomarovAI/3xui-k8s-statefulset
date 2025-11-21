@@ -1,4 +1,4 @@
-name: 🚀 Build, Test, Validate & Push
+name: 🚀 Build, Test, Validate & Push (Ultimate Audit)
 
 on:
   push:
@@ -8,17 +8,19 @@ on:
       - 'Dockerfile*'
       - '**/scripts/**'
       - '.dockerignore'
+      - '**/*.yaml'
   pull_request:
     paths:
       - 'Dockerfile*'
       - '**/scripts/**'
+      - '**/*.yaml'
   workflow_dispatch:
 
 env:
   IMAGE_NAME: artur7892988/3xui-k8s-statefulset
 
 jobs:
-  lint:
+  hadolint:
     name: 🔍 Hadolint
     runs-on: ubuntu-latest
     steps:
@@ -30,7 +32,7 @@ jobs:
   dockle:
     name: 🛡️ Dockle Best Practices
     runs-on: ubuntu-latest
-    needs: lint
+    needs: hadolint
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -48,10 +50,36 @@ jobs:
           exit-code: 1
           exit-level: fatal
 
+  checkov:
+    name: 🧑‍💻 Checkov static IaC lint
+    runs-on: ubuntu-latest
+    needs: dockle
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: "dockerfile,kubernetes"
+
+  kubeval:
+    name: 📝 Kubeval + Kube-score manifest check
+    runs-on: ubuntu-latest
+    needs: checkov
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifests (kubeval)
+        uses: instrumenta/kubeval-action@v0.1.0
+        with:
+          files: clusters/production/applications/3xui/statefulset.yaml
+      - name: Best practices (kube-score)
+        uses: zegl/kube-score-action@v2
+        with:
+          manifests: clusters/production/applications/3xui/statefulset.yaml
+
   dive:
     name: 🔬 Dive layers/waste analysis
     runs-on: ubuntu-latest
-    needs: dockle
+    needs: kubeval
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -112,10 +140,54 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
 
+  grype:
+    name: 🔒 Grype Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: trivy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image for grype
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:grype
+          file: ./Dockerfile
+      - name: Run Grype scan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          grype ${{ env.IMAGE_NAME }}:grype --fail-on critical
+
+  sbom:
+    name: 🧾 Syft SBOM
+    runs-on: ubuntu-latest
+    needs: grype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image for SBOM
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:sbom
+          file: ./Dockerfile
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}:sbom
+          output-file: sbom.spdx.json
+      - name: Upload SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
   dgoss:
     name: 🚦 Runtime behaviour test (dgoss)
     runs-on: ubuntu-latest
-    needs: trivy
+    needs: sbom
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
