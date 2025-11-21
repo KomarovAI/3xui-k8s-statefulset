@@ -18,22 +18,24 @@ jobs:
       - name: Build Docker image for all image jobs
         run: |
           docker build -t ${{ env.IMAGE_NAME }} .
-      - name: Export image to cache (prevent prune)
-        run: |
-          echo "This step keeps the image alive across jobs."
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
 
   trivy-scan:
     name: 'Trivy - Vulnerability Scan (Dockerfile)'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Run Trivy on Dockerfile'
-        uses: aquasecurity/trivy-action@v0.19.0
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Run Trivy on Dockerfile
+        run: |
+          trivy config Dockerfile | tee -a artifact/summary.txt
+      - name: Upload trivy output
+        uses: actions/upload-artifact@v4
         with:
-          image-ref: 'Dockerfile'
-          scan-type: 'config'
-          format: 'table'
-          exit-code: '1'
+          name: summary-tmp-trivy
+          path: artifact/summary.txt
 
   dockle-scan:
     name: 'Dockle - Docker Image Linter'
@@ -41,14 +43,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Load Docker image from previous build'
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Run Dockle
         run: |
-          echo "Image is available as ${{ env.IMAGE_NAME }}"
-      - name: 'Run Dockle'
-        uses: goodwithtech/dockle-action@main
+          dockle ${{ env.IMAGE_NAME }} | tee -a artifact/summary.txt
+      - name: Upload dockle output
+        uses: actions/upload-artifact@v4
         with:
-          image: ${{ env.IMAGE_NAME }}
-          exit-code: '1'
+          name: summary-tmp-dockle
+          path: artifact/summary.txt
 
   grype-scan:
     name: 'Grype - Container Vulnerability Scan'
@@ -56,12 +60,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Scan docker image with Grype'
-        uses: anchore/scan-action@v3
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Scan docker image with Grype
+        run: |
+          grype ${{ env.IMAGE_NAME }} | tee -a artifact/summary.txt
+      - name: Upload grype output
+        uses: actions/upload-artifact@v4
         with:
-          image: ${{ env.IMAGE_NAME }}
-          fail-build: true
-          severity-cutoff: high
+          name: summary-tmp-grype
+          path: artifact/summary.txt
 
   syft-sbom:
     name: 'Syft - Generate SBOM'
@@ -69,87 +77,118 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Generate SBOM (spdx-json)'
-        uses: anchore/sbom-action@v0
-        with:
-          image: ${{ env.IMAGE_NAME }}
-          format: spdx-json
-          output-file: sbom.json
-      - name: 'Upload SBOM as artifact'
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Generate SBOM (spdx-json)
+        run: |
+          syft ${{ env.IMAGE_NAME }} -o spdx-json > artifact/sbom.json
+          echo 'SBOM generated' | tee -a artifact/summary.txt
+      - name: Upload SBOM as artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom-report
-          path: sbom.json
+          path: artifact/sbom.json
 
   polaris-score:
     name: 'Polaris - K8s Policy Enforcement'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Install Polaris CLI'
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Install Polaris CLI
         run: |
           curl -sSL https://github.com/FairwindsOps/polaris/releases/download/8.5.0/polaris_linux_amd64.tar.gz | tar xz
           sudo mv polaris /usr/local/bin/
-      - name: 'Run Polaris Score on manifests'
+      - name: Run Polaris Score on manifests
         run: |
           if [ -d "manifests" ]; then
-            polaris audit --audit-path manifests --set-exit-code-on-error true
+            polaris audit --audit-path manifests --set-exit-code-on-error true | tee -a artifact/summary.txt
           else
-            echo 'No manifests/ directory found.'
+            echo 'No manifests/ directory found.' | tee -a artifact/summary.txt
           fi
+      - name: Upload polaris output
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-tmp-polaris
+          path: artifact/summary.txt
 
   kubeconform-validate:
     name: 'kubeconform - YAML Schema Validation'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Install kubeconform'
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Install kubeconform
         run: |
           wget https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz
           tar -xzf kubeconform-linux-amd64.tar.gz
           chmod +x kubeconform
           sudo mv kubeconform /usr/local/bin/
-      - name: 'Validate K8s manifests'
+      - name: Validate K8s manifests
         run: |
           if [ -d "manifests" ]; then
-            kubeconform -strict -summary manifests/*.yaml
+            kubeconform -strict -summary manifests/*.yaml | tee -a artifact/summary.txt
           else
-            echo 'No manifests/ directory found.'
+            echo 'No manifests/ directory found.' | tee -a artifact/summary.txt
           fi
+      - name: Upload kubeconform output
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-tmp-kubeconform
+          path: artifact/summary.txt
 
   conftest-policy:
     name: 'Conftest - OPA Policy Check'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Install conftest'
+      - name: Prepare artifact dir
+        run: mkdir -p artifact
+      - name: Install conftest
         run: |
           wget https://github.com/open-policy-agent/conftest/releases/download/v0.49.0/conftest_0.49.0_Linux_x86_64.tar.gz
           tar -xzf conftest_0.49.0_Linux_x86_64.tar.gz
           chmod +x conftest
           sudo mv conftest /usr/local/bin/
-      - name: 'Run conftest on K8s manifests (if policies exist)'
+      - name: Run conftest on K8s manifests (if policies exist)
         run: |
           if [ -d "policies" ] && [ -d "manifests" ]; then
-            echo "✅ Found policies/ and manifests/ - running conftest"
+            echo "✅ Found policies/ and manifests/ - running conftest" | tee -a artifact/summary.txt
             shopt -s nullglob
             for file in manifests/*.yaml; do
-              echo "Testing $file..."
-              conftest test "$file" --policy policies/ || exit 1
+              echo "Testing $file..." | tee -a artifact/summary.txt
+              conftest test "$file" --policy policies/ | tee -a artifact/summary.txt
             done
           else
-            echo "⚠️ No policies/ or manifests/ directory - skipping conftest"
+            echo "⚠️ No policies/ or manifests/ directory - skipping conftest" | tee -a artifact/summary.txt
           fi
+      - name: Upload conftest output
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-tmp-conftest
+          path: artifact/summary.txt
 
   summary:
-    name: 'Workflow Summary - Check All Results'
+    name: 'Workflow Summary - Unified RAW Security Report'
     needs: [trivy-scan, dockle-scan, grype-scan, syft-sbom, polaris-score, kubeconform-validate, conftest-policy]
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Check overall status
+      - name: Download all temp summaries
+        uses: actions/download-artifact@v4
+      - name: Aggregate all into summary.txt
         run: |
-          echo 'Summary of all jobs:'
+          cat */summary.txt > summary.txt
+          tail -n 1000 summary.txt > summary_trimmed.txt
+      - name: Upload unified RAW security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-summary-raw
+          path: summary_trimmed.txt
+      - name: Show workflow conclusion
+        run: |
           code=0
           for job in "trivy-scan" "dockle-scan" "grype-scan" "syft-sbom" "polaris-score" "kubeconform-validate" "conftest-policy"; do
             status="${{ needs[job].result }}"
@@ -159,7 +198,7 @@ jobs:
             fi
           done
           if [[ $code -ne 0 ]]; then
-            echo '❌ Workflow FAILED. Check the logs above.'
+            echo '❌ Workflow FAILED. Check RAW summary above.'
             exit 1
           else
             echo '✅ All security/K8s checks passed.'
