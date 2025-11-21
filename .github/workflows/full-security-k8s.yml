@@ -1,0 +1,70 @@
+name: Full Security & K8s Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  trivy-scan:
+    name: 'Trivy - Vulnerability Scan'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Run Trivy on Dockerfile'
+        uses: aquasecurity/trivy-action@v0.19.0
+        with:
+          image-ref: 'Dockerfile'
+          scan-type: 'config'
+          format: 'table'
+          exit-code: '1'
+
+  dockle-scan:
+    name: 'Dockle - Docker Image Linter'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Build Docker image for scan'
+        run: docker build -t test-image:local .
+      - name: 'Run Dockle'
+        uses: goodwithtech/dockle-action@main
+        with:
+          image: 'test-image:local'
+          exit-code: '1'
+
+  polaris-score:
+    name: 'Polaris - K8s Policy Enforcement'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Install Polaris CLI'
+        run: |
+          curl -sSL https://github.com/FairwindsOps/polaris/releases/download/8.5.0/polaris_linux_amd64.tar.gz | tar xz
+          sudo mv polaris /usr/local/bin/
+      - name: 'Run Polaris Score on manifests'
+        run: |
+          if [ -d "manifests" ]; then
+            polaris audit --audit-path manifests --set-exit-code-on-error true
+          else
+            echo 'No manifests/ directory found.'
+          fi
+
+  kubeconform-validate:
+    name: 'kubeconform - YAML Schema Validation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Install kubeconform'
+        run: |
+          wget https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform-linux-amd64.tar.gz
+          chmod +x kubeconform
+          sudo mv kubeconform /usr/local/bin/
+      - name: 'Validate K8s manifests'
+        run: |
+          if [ -d "manifests" ]; then
+            kubeconform -strict -summary manifests/*.yaml
+          else
+            echo 'No manifests/ directory found.'
+          fi
