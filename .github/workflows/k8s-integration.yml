@@ -22,8 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
+      has-errors: ${{ steps.error-check.outputs.has-errors }}
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Create logs directory
+        run: mkdir -p logs errors
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -37,9 +41,10 @@ jobs:
           outputs: type=docker,dest=/tmp/image.tar
           cache-from: type=gha
           cache-to: type=gha,mode=max
+        continue-on-error: true
       
       - name: Load image
-        run: docker load --input /tmp/image.tar
+        run: docker load --input /tmp/image.tar || true
       
       # 🔒 Trivy - Vulnerability Scanning (GitHub Action)
       - name: 🔒 Trivy - Container Image Scan
@@ -49,12 +54,14 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
+        continue-on-error: true
           
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
+        continue-on-error: true
       
       - name: Trivy - JSON Report
         uses: aquasecurity/trivy-action@master
@@ -62,6 +69,7 @@ jobs:
           image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: 'json'
           output: 'logs/trivy-image.json'
+        continue-on-error: true
       
       # 📦 SBOM Generation with Syft
       - name: 📦 Generate SBOM (Syft)
@@ -70,6 +78,7 @@ jobs:
           image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: spdx-json
           output-file: logs/sbom.spdx.json
+        continue-on-error: true
       
       # 🔐 Grype - SBOM Vulnerability Scanning
       - name: 🔐 Grype - SBOM Vulnerability Scan
@@ -77,11 +86,64 @@ jobs:
         with:
           sbom: logs/sbom.spdx.json
           fail-build: false
-          output-format: sarif
+          output-format: json
           severity-cutoff: medium
+        continue-on-error: true
+      
+      # Extract errors from this stage
+      - name: 📊 Extract Build Stage Errors
+        if: always()
+        run: |
+          cat > errors/build-errors.json <<'EOF'
+          {
+            "stage": "build-and-scan",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "errors": []
+          }
+          EOF
+          
+          # Check Trivy results
+          if [ -f "logs/trivy-image.json" ]; then
+            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' logs/trivy-image.json 2>/dev/null || echo "0")
+            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' logs/trivy-image.json 2>/dev/null || echo "0")
+            
+            if [ "$CRITICAL" -gt "0" ] || [ "$HIGH" -gt "0" ]; then
+              jq --arg critical "$CRITICAL" --arg high "$HIGH" \
+                '.errors += [{
+                  "category": "container-security",
+                  "severity": "CRITICAL",
+                  "tool": "Trivy",
+                  "message": "Found \($critical) CRITICAL and \($high) HIGH vulnerabilities in container image",
+                  "recommendation": "Review logs/trivy-image.json and update vulnerable dependencies"
+                }]' errors/build-errors.json > errors/build-errors.tmp && mv errors/build-errors.tmp errors/build-errors.json
+            fi
+          fi
+          
+          # Check build status
+          if [ "${{ steps.build.outcome }}" == "failure" ]; then
+            jq '.errors += [{
+              "category": "build",
+              "severity": "CRITICAL",
+              "tool": "Docker Build",
+              "message": "Docker image build failed",
+              "recommendation": "Check Dockerfile syntax and build context"
+            }]' errors/build-errors.json > errors/build-errors.tmp && mv errors/build-errors.tmp errors/build-errors.json
+          fi
+      
+      - name: Check for errors
+        id: error-check
+        if: always()
+        run: |
+          ERROR_COUNT=$(jq '.errors | length' errors/build-errors.json 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "has-errors=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-errors=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Save image artifact
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: docker-image
           path: /tmp/image.tar
@@ -89,19 +151,24 @@ jobs:
       
       - name: Save scan results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: build-scan-results
-          path: logs/
+          path: |
+            logs/
+            errors/
 
   # ==================== STAGE 2: MANIFEST VALIDATION ====================
   manifest-validation:
     name: 📋 Manifest Validation & Policy Check
     runs-on: ubuntu-latest
+    outputs:
+      has-errors: ${{ steps.error-check.outputs.has-errors }}
     steps:
       - uses: actions/checkout@v4
       
       - name: Create logs directory
-        run: mkdir -p logs
+        run: mkdir -p logs errors
       
       # ✅ Kubeconform - YAML Schema Validation
       - name: ✅ Kubeconform - YAML Validation
@@ -109,6 +176,7 @@ jobs:
           curl -L https://github.com/yannh/kubeconform/releases/download/v0.6.6/kubeconform-linux-amd64.tar.gz | tar xz
           ./kubeconform -summary -output json k8s/*.yaml > logs/kubeconform.json 2>&1 || true
           cat logs/kubeconform.json
+        continue-on-error: true
       
       # ⚠️ Pluto - Deprecated API Detection
       - name: ⚠️ Pluto - Deprecated API Check
@@ -116,6 +184,7 @@ jobs:
           curl -L https://github.com/FairwindsOps/pluto/releases/download/v5.19.0/pluto_5.19.0_linux_amd64.tar.gz | tar xz
           ./pluto detect-files -d k8s/ -o wide > logs/pluto-deprecated.txt 2>&1 || true
           cat logs/pluto-deprecated.txt
+        continue-on-error: true
       
       # 🔐 Checkov - IaC Security Scan
       - name: 🔐 Checkov - IaC Security Scan
@@ -125,6 +194,7 @@ jobs:
           output_format: cli,json
           output_file_path: console,logs/checkov.json
           soft_fail: true
+        continue-on-error: true
       
       # 🛡️ Kubesec - Manifest Security Scoring
       - name: 🛡️ Kubesec - Security Risk Analysis
@@ -134,6 +204,7 @@ jobs:
             curl -sSX POST --data-binary @$f https://v2.kubesec.io/scan/ | tee -a logs/kubesec-scan.json
             echo "" >> logs/kubesec-scan.json
           done || true
+        continue-on-error: true
       
       # 🎯 Kyverno CLI - Policy Validation (Dry-run)
       - name: 🎯 Kyverno - Policy Validation
@@ -144,6 +215,7 @@ jobs:
           # Apply best practice policies
           ./kyverno apply policies/kyverno/ --resource k8s/ > logs/kyverno-validation.txt 2>&1 || true
           cat logs/kyverno-validation.txt
+        continue-on-error: true
       
       # 📦 Helm Lint
       - name: 📦 Helm Chart Validation
@@ -154,26 +226,112 @@ jobs:
           else
             echo "No Helm charts found" > logs/helm-lint.txt
           fi
+        continue-on-error: true
+      
+      # Extract errors from this stage
+      - name: 📊 Extract Validation Stage Errors
+        if: always()
+        run: |
+          cat > errors/validation-errors.json <<'EOF'
+          {
+            "stage": "manifest-validation",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "errors": []
+          }
+          EOF
+          
+          # Check Kubeconform
+          if [ -f "logs/kubeconform.json" ]; then
+            INVALID=$(jq '.summary.invalid // 0' logs/kubeconform.json 2>/dev/null || echo "0")
+            if [ "$INVALID" -gt "0" ]; then
+              jq --arg count "$INVALID" '.errors += [{
+                "category": "yaml-validation",
+                "severity": "HIGH",
+                "tool": "Kubeconform",
+                "message": "\($count) manifests failed schema validation",
+                "recommendation": "Review logs/kubeconform.json for detailed validation errors"
+              }]' errors/validation-errors.json > errors/validation-errors.tmp && mv errors/validation-errors.tmp errors/validation-errors.json
+            fi
+          fi
+          
+          # Check Pluto for deprecated APIs
+          if [ -f "logs/pluto-deprecated.txt" ] && grep -q "DEPRECATED" logs/pluto-deprecated.txt; then
+            DEPRECATED_COUNT=$(grep -c "DEPRECATED" logs/pluto-deprecated.txt || echo "0")
+            jq --arg count "$DEPRECATED_COUNT" '.errors += [{
+              "category": "deprecated-api",
+              "severity": "MEDIUM",
+              "tool": "Pluto",
+              "message": "\($count) deprecated Kubernetes APIs detected",
+              "recommendation": "Update manifests to use current API versions. See logs/pluto-deprecated.txt"
+            }]' errors/validation-errors.json > errors/validation-errors.tmp && mv errors/validation-errors.tmp errors/validation-errors.json
+          fi
+          
+          # Check Checkov
+          if [ -f "logs/checkov.json" ]; then
+            FAILED=$(jq '.summary.failed // 0' logs/checkov.json 2>/dev/null || echo "0")
+            if [ "$FAILED" -gt "0" ]; then
+              jq --arg count "$FAILED" '.errors += [{
+                "category": "iac-security",
+                "severity": "HIGH",
+                "tool": "Checkov",
+                "message": "\($count) IaC security checks failed",
+                "recommendation": "Review logs/checkov.json and fix security misconfigurations"
+              }]' errors/validation-errors.json > errors/validation-errors.tmp && mv errors/validation-errors.tmp errors/validation-errors.json
+            fi
+          fi
+          
+          # Check Kyverno policies
+          if [ -f "logs/kyverno-validation.txt" ] && grep -q "fail" logs/kyverno-validation.txt; then
+            POLICY_FAILS=$(grep -c "fail" logs/kyverno-validation.txt || echo "0")
+            jq --arg count "$POLICY_FAILS" '.errors += [{
+              "category": "policy-violation",
+              "severity": "MEDIUM",
+              "tool": "Kyverno",
+              "message": "\($count) policy violations detected",
+              "recommendation": "Review logs/kyverno-validation.txt and ensure compliance with policies"
+            }]' errors/validation-errors.json > errors/validation-errors.tmp && mv errors/validation-errors.tmp errors/validation-errors.json
+          fi
+      
+      - name: Check for errors
+        id: error-check
+        if: always()
+        run: |
+          ERROR_COUNT=$(jq '.errors | length' errors/validation-errors.json 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "has-errors=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-errors=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Upload validation results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: manifest-validation-results
-          path: logs/
+          path: |
+            logs/
+            errors/
 
   # ==================== STAGE 3: CLUSTER DEPLOYMENT ====================
   k8s-deployment:
     name: 🚦 K8s Cluster Deployment
     runs-on: ubuntu-latest
     needs: [build-and-scan, manifest-validation]
+    if: success() || failure()
+    outputs:
+      has-errors: ${{ steps.error-check.outputs.has-errors }}
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Create logs directory
+        run: mkdir -p logs errors
       
       - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
           path: /tmp
+        continue-on-error: true
       
       - name: Create KIND config
         run: |
@@ -212,11 +370,13 @@ jobs:
           config: kind-config.yaml
           wait: 90s
           kubectl_version: ${{ env.KUBE_VERSION }}
+        continue-on-error: true
       
       - name: Load Docker image to KIND
         run: |
-          docker load --input /tmp/image.tar
-          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster
+          docker load --input /tmp/image.tar || true
+          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster || true
+        continue-on-error: true
       
       - name: Install Kyverno (Policy Engine)
         run: |
@@ -226,12 +386,13 @@ jobs:
             --namespace kyverno \
             --create-namespace \
             --set replicaCount=1 \
-            --wait --timeout 300s
+            --wait --timeout 300s || true
           
           # Install Kyverno policies
           kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/pod-security/restricted/disallow-privilege-escalation/disallow-privilege-escalation.yaml || true
           kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/best-practices/require-labels/require-labels.yaml || true
           kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/best-practices/require-resource-requests/require-resource-requests.yaml || true
+        continue-on-error: true
       
       - name: Deploy Application
         run: |
@@ -240,22 +401,73 @@ jobs:
           
           # Apply manifests
           kubectl create namespace 3xui-test || true
-          kubectl apply -f k8s/ -n 3xui-test
+          kubectl apply -f k8s/ -n 3xui-test || true
           
           # Wait for deployment
           kubectl wait --for=condition=ready pod -l app=3xui -n 3xui-test --timeout=300s || true
+        continue-on-error: true
       
       - name: Verify deployment
+        if: always()
         run: |
-          mkdir -p logs
-          kubectl get all -n 3xui-test -o wide | tee logs/deployment-status.txt
-          kubectl get pods -n 3xui-test -o json | jq '.items[] | {name: .metadata.name, phase: .status.phase, conditions: .status.conditions}' | tee logs/pod-details.json
+          kubectl get all -n 3xui-test -o wide | tee logs/deployment-status.txt || true
+          kubectl get pods -n 3xui-test -o json | jq '.items[] | {name: .metadata.name, phase: .status.phase, conditions: .status.conditions}' | tee logs/pod-details.json || true
+        continue-on-error: true
+      
+      # Extract deployment errors
+      - name: 📊 Extract Deployment Errors
+        if: always()
+        run: |
+          cat > errors/deployment-errors.json <<'EOF'
+          {
+            "stage": "k8s-deployment",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "errors": []
+          }
+          EOF
+          
+          # Check pod status
+          if [ -f "logs/pod-details.json" ]; then
+            NOT_RUNNING=$(jq '[.[] | select(.phase != "Running")] | length' logs/pod-details.json 2>/dev/null || echo "0")
+            if [ "$NOT_RUNNING" -gt "0" ]; then
+              jq --arg count "$NOT_RUNNING" '.errors += [{
+                "category": "deployment",
+                "severity": "CRITICAL",
+                "tool": "kubectl",
+                "message": "\($count) pods are not in Running state",
+                "recommendation": "Check logs/pod-details.json and kubectl describe pods for failure reasons"
+              }]' errors/deployment-errors.json > errors/deployment-errors.tmp && mv errors/deployment-errors.tmp errors/deployment-errors.json
+            fi
+          fi
+      
+      - name: Check for errors
+        id: error-check
+        if: always()
+        run: |
+          ERROR_COUNT=$(jq '.errors | length' errors/deployment-errors.json 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "has-errors=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-errors=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload deployment logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-results
+          path: |
+            logs/
+            errors/
 
-  # ==================== STAGE 4: RUNTIME SECURITY & TESTING ====================
+  # ==================== STAGE 4: RUNTIME SECURITY & COMPLIANCE ====================
   runtime-security:
     name: 🔒 Runtime Security & Compliance
     runs-on: ubuntu-latest
     needs: k8s-deployment
+    if: success() || failure()
+    outputs:
+      has-errors: ${{ steps.error-check.outputs.has-errors }}
     steps:
       - uses: actions/checkout@v4
       
@@ -265,24 +477,27 @@ jobs:
           cluster_name: test-cluster
           version: ${{ env.KIND_VERSION }}
           kubectl_version: ${{ env.KUBE_VERSION }}
+        continue-on-error: true
       
       - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
           path: /tmp
+        continue-on-error: true
       
       - name: Load image and deploy
         run: |
-          docker load --input /tmp/image.tar
-          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster
+          docker load --input /tmp/image.tar || true
+          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster || true
           kubectl create namespace 3xui-test || true
           find k8s/ -name "*.yaml" -exec sed -i "s|image:.*$IMAGE_NAME.*|image: $IMAGE_NAME:${{ github.sha }}|g" {} \;
           kubectl apply -f k8s/ -n 3xui-test || true
           sleep 30
+        continue-on-error: true
       
       - name: Create logs directory
-        run: mkdir -p logs
+        run: mkdir -p logs errors
       
       # 🚨 CIS Benchmark with kube-bench
       - name: 🚨 CIS Kubernetes Benchmark (kube-bench)
@@ -294,7 +509,8 @@ jobs:
             -v $(which kubectl):/usr/local/bin/kubectl:ro \
             -v ~/.kube:/root/.kube:ro \
             aquasec/kube-bench:latest \
-            --benchmark cis-1.24 --json | tee logs/kube-bench.json
+            --benchmark cis-1.24 --json | tee logs/kube-bench.json || true
+        continue-on-error: true
       
       # 🎯 Polaris - Best Practices Audit
       - name: 🎯 Polaris - Configuration Audit
@@ -309,8 +525,9 @@ jobs:
           docker run --rm \
             -v ~/.kube:/root/.kube:ro \
             quay.io/fairwinds/polaris:latest \
-            audit --format=pretty --kubeconfig /root/.kube/config \
-            > logs/polaris-audit.txt 2>&1 || true
+            audit --format=json --kubeconfig /root/.kube/config \
+            > logs/polaris-audit.json 2>&1 || true
+        continue-on-error: true
       
       # 🛡️ Falco - Runtime Security Monitoring
       - name: 🛡️ Falco - Runtime Threat Detection
@@ -327,9 +544,11 @@ jobs:
           # Collect Falco events
           sleep 30
           kubectl logs -n falco -l app.kubernetes.io/name=falco --tail=100 > logs/falco-events.txt 2>&1 || true
+        continue-on-error: true
       
       # 📊 Resource Analysis
       - name: 📊 Pod Resource Analysis
+        if: always()
         run: |
           kubectl get pods -A -o json | jq '.items[] | {
             name: .metadata.name, 
@@ -337,29 +556,103 @@ jobs:
             phase: .status.phase,
             resources: .spec.containers[].resources,
             securityContext: .spec.containers[].securityContext
-          }' > logs/pod-resources.json
+          }' > logs/pod-resources.json || true
           
           # Check for privileged containers
           kubectl get pods -A -o json | \
-            jq '.items[] | select(.spec.containers[].securityContext.privileged==true or .spec.containers[].securityContext.runAsUser==0)' \
+            jq '[.items[] | select(.spec.containers[].securityContext.privileged==true or .spec.containers[].securityContext.runAsUser==0)]' \
             > logs/privileged-containers.json || echo "[]" > logs/privileged-containers.json
+        continue-on-error: true
       
       # 🌐 Network Policy Check
       - name: 🌐 Network Policy Validation
+        if: always()
         run: |
           kubectl get networkpolicies -A -o yaml > logs/network-policies.yaml || echo "No NetworkPolicies found" > logs/network-policies.yaml
+        continue-on-error: true
+      
+      # Extract security errors
+      - name: 📊 Extract Security Errors
+        if: always()
+        run: |
+          cat > errors/security-errors.json <<'EOF'
+          {
+            "stage": "runtime-security",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "errors": []
+          }
+          EOF
+          
+          # Check CIS Benchmark
+          if [ -f "logs/kube-bench.json" ]; then
+            FAILS=$(jq '[.Controls[]?.tests[]?.results[]? | select(.status=="FAIL")] | length' logs/kube-bench.json 2>/dev/null || echo "0")
+            if [ "$FAILS" -gt "0" ]; then
+              jq --arg count "$FAILS" '.errors += [{
+                "category": "compliance",
+                "severity": "HIGH",
+                "tool": "kube-bench",
+                "message": "\($count) CIS Benchmark checks failed",
+                "recommendation": "Review logs/kube-bench.json and remediate CIS failures"
+              }]' errors/security-errors.json > errors/security-errors.tmp && mv errors/security-errors.tmp errors/security-errors.json
+            fi
+          fi
+          
+          # Check Polaris
+          if [ -f "logs/polaris-audit.json" ]; then
+            DANGERS=$(jq '[.Results[]? | select(.PodResult?.Results? | to_entries[] | .value.severity=="danger")] | length' logs/polaris-audit.json 2>/dev/null || echo "0")
+            if [ "$DANGERS" -gt "0" ]; then
+              jq --arg count "$DANGERS" '.errors += [{
+                "category": "best-practices",
+                "severity": "MEDIUM",
+                "tool": "Polaris",
+                "message": "\($count) dangerous configuration issues found",
+                "recommendation": "Review logs/polaris-audit.json and fix configuration violations"
+              }]' errors/security-errors.json > errors/security-errors.tmp && mv errors/security-errors.tmp errors/security-errors.json
+            fi
+          fi
+          
+          # Check privileged containers
+          if [ -f "logs/privileged-containers.json" ]; then
+            PRIV_COUNT=$(jq 'length' logs/privileged-containers.json 2>/dev/null || echo "0")
+            if [ "$PRIV_COUNT" -gt "0" ]; then
+              jq --arg count "$PRIV_COUNT" '.errors += [{
+                "category": "security-context",
+                "severity": "CRITICAL",
+                "tool": "kubectl",
+                "message": "\($count) privileged or root containers detected",
+                "recommendation": "Remove privileged mode and set runAsNonRoot: true"
+              }]' errors/security-errors.json > errors/security-errors.tmp && mv errors/security-errors.tmp errors/security-errors.json
+            fi
+          fi
+      
+      - name: Check for errors
+        id: error-check
+        if: always()
+        run: |
+          ERROR_COUNT=$(jq '.errors | length' errors/security-errors.json 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "has-errors=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-errors=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Upload security results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: runtime-security-results
-          path: logs/
+          path: |
+            logs/
+            errors/
 
   # ==================== STAGE 5: INTEGRATION & E2E TESTING ====================
   integration-testing:
     name: 🧪 Integration & E2E Testing
     runs-on: ubuntu-latest
     needs: k8s-deployment
+    if: success() || failure()
+    outputs:
+      has-errors: ${{ steps.error-check.outputs.has-errors }}
     steps:
       - uses: actions/checkout@v4
       
@@ -369,24 +662,27 @@ jobs:
           cluster_name: test-cluster
           version: ${{ env.KIND_VERSION }}
           kubectl_version: ${{ env.KUBE_VERSION }}
+        continue-on-error: true
       
       - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
           path: /tmp
+        continue-on-error: true
       
       - name: Load image and deploy
         run: |
-          docker load --input /tmp/image.tar
-          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster
+          docker load --input /tmp/image.tar || true
+          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster || true
           kubectl create namespace 3xui-test || true
           find k8s/ -name "*.yaml" -exec sed -i "s|image:.*$IMAGE_NAME.*|image: $IMAGE_NAME:${{ github.sha }}|g" {} \;
           kubectl apply -f k8s/ -n 3xui-test || true
           kubectl wait --for=condition=ready pod -l app=3xui -n 3xui-test --timeout=300s || true
+        continue-on-error: true
       
       - name: Create logs directory
-        run: mkdir -p logs
+        run: mkdir -p logs errors
       
       # 🔌 Service Connectivity Test
       - name: 🔌 Network Connectivity (netshoot)
@@ -396,15 +692,19 @@ jobs:
             --restart=Never \
             -- /bin/bash -c "ping -c 4 google.com && nslookup kubernetes.default" \
             2>&1 | tee logs/network-connectivity.txt || true
+        continue-on-error: true
       
       # 🌐 Service Mesh Readiness
       - name: 🌐 Service Discovery Test
+        if: always()
         run: |
-          kubectl get svc -A -o wide | tee logs/services.txt
-          kubectl get endpoints -A -o wide | tee logs/endpoints.txt
+          kubectl get svc -A -o wide | tee logs/services.txt || true
+          kubectl get endpoints -A -o wide | tee logs/endpoints.txt || true
+        continue-on-error: true
       
       # ⚡ Application Health Checks
       - name: ⚡ Application Health & Readiness
+        if: always()
         run: |
           kubectl get pods -n 3xui-test -o json | jq '.items[] | {
             name: .metadata.name,
@@ -412,7 +712,8 @@ jobs:
             restartCount: .status.containerStatuses[].restartCount,
             livenessProbe: .spec.containers[].livenessProbe,
             readinessProbe: .spec.containers[].readinessProbe
-          }' > logs/health-checks.json
+          }' > logs/health-checks.json || true
+        continue-on-error: true
       
       # 📡 API Endpoint Testing (if applicable)
       - name: 📡 API Endpoint Smoke Tests
@@ -426,30 +727,90 @@ jobs:
           curl -v http://localhost:8080 > logs/api-smoke-test.txt 2>&1 || echo "API not accessible" > logs/api-smoke-test.txt
           
           kill $PF_PID 2>/dev/null || true
+        continue-on-error: true
       
       # 🗄️ Persistent Volume Tests
       - name: 🗄️ Storage & PV/PVC Validation
+        if: always()
         run: |
-          kubectl get pv,pvc -A -o wide > logs/storage-status.txt
+          kubectl get pv,pvc -A -o wide > logs/storage-status.txt || true
           kubectl describe pvc -n 3xui-test >> logs/storage-status.txt 2>&1 || true
+        continue-on-error: true
       
       # 📋 Event Analysis
       - name: 📋 Kubernetes Events Analysis
+        if: always()
         run: |
-          kubectl get events -A --sort-by='.lastTimestamp' > logs/k8s-events.txt
+          kubectl get events -A --sort-by='.lastTimestamp' > logs/k8s-events.txt || true
           kubectl get events -n 3xui-test --field-selector type!=Normal > logs/warning-events.txt || echo "No warnings" > logs/warning-events.txt
+        continue-on-error: true
+      
+      # Extract integration errors
+      - name: 📊 Extract Integration Errors
+        if: always()
+        run: |
+          cat > errors/integration-errors.json <<'EOF'
+          {
+            "stage": "integration-testing",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "errors": []
+          }
+          EOF
+          
+          # Check health status
+          if [ -f "logs/health-checks.json" ]; then
+            NOT_READY=$(jq '[.[] | select(.ready != "True")] | length' logs/health-checks.json 2>/dev/null || echo "0")
+            if [ "$NOT_READY" -gt "0" ]; then
+              jq --arg count "$NOT_READY" '.errors += [{
+                "category": "health-check",
+                "severity": "HIGH",
+                "tool": "kubectl",
+                "message": "\($count) pods failed readiness checks",
+                "recommendation": "Review logs/health-checks.json and pod logs"
+              }]' errors/integration-errors.json > errors/integration-errors.tmp && mv errors/integration-errors.tmp errors/integration-errors.json
+            fi
+          fi
+          
+          # Check for warning events
+          if [ -f "logs/warning-events.txt" ] && [ "$(wc -l < logs/warning-events.txt)" -gt "1" ]; then
+            WARNING_COUNT=$(wc -l < logs/warning-events.txt)
+            jq --arg count "$WARNING_COUNT" '.errors += [{
+              "category": "cluster-events",
+              "severity": "MEDIUM",
+              "tool": "kubectl events",
+              "message": "\($count) warning events detected",
+              "recommendation": "Review logs/warning-events.txt for event details"
+            }]' errors/integration-errors.json > errors/integration-errors.tmp && mv errors/integration-errors.tmp errors/integration-errors.json
+          fi
+      
+      - name: Check for errors
+        id: error-check
+        if: always()
+        run: |
+          ERROR_COUNT=$(jq '.errors | length' errors/integration-errors.json 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "has-errors=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-errors=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Upload test results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: integration-test-results
-          path: logs/
+          path: |
+            logs/
+            errors/
 
   # ==================== STAGE 6: PERFORMANCE & CHAOS TESTING ====================
   performance-chaos:
     name: 🚀 Performance & Chaos Engineering
     runs-on: ubuntu-latest
     needs: k8s-deployment
+    if: success() || failure()
+    outputs:
+      has-errors: ${{ steps.error-check.outputs.has-errors }}
     steps:
       - uses: actions/checkout@v4
       
@@ -459,24 +820,27 @@ jobs:
           cluster_name: test-cluster
           version: ${{ env.KIND_VERSION }}
           kubectl_version: ${{ env.KUBE_VERSION }}
+        continue-on-error: true
       
       - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
           path: /tmp
+        continue-on-error: true
       
       - name: Load image and deploy
         run: |
-          docker load --input /tmp/image.tar
-          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster
+          docker load --input /tmp/image.tar || true
+          kind load docker-image ${{ env.IMAGE_NAME }}:${{ github.sha }} --name test-cluster || true
           kubectl create namespace 3xui-test || true
           find k8s/ -name "*.yaml" -exec sed -i "s|image:.*$IMAGE_NAME.*|image: $IMAGE_NAME:${{ github.sha }}|g" {} \;
           kubectl apply -f k8s/ -n 3xui-test || true
           kubectl wait --for=condition=ready pod -l app=3xui -n 3xui-test --timeout=300s || true
+        continue-on-error: true
       
       - name: Create logs directory
-        run: mkdir -p logs
+        run: mkdir -p logs errors
       
       # 📊 k6 - Performance Testing
       - name: 📊 k6 - Load Testing
@@ -518,6 +882,7 @@ jobs:
             2>&1 | tee logs/k6-output.txt || true
           
           kill $PF_PID 2>/dev/null || true
+        continue-on-error: true
       
       # 🌪️ LitmusChaos - Chaos Engineering
       - name: 🌪️ LitmusChaos - Resilience Testing
@@ -559,38 +924,186 @@ jobs:
           sleep 60
           kubectl get chaosengine -n 3xui-test -o yaml > logs/chaos-results.yaml 2>&1 || true
           kubectl get chaosresult -n 3xui-test -o yaml >> logs/chaos-results.yaml 2>&1 || true
+        continue-on-error: true
+      
+      # Extract performance errors
+      - name: 📊 Extract Performance Errors
+        if: always()
+        run: |
+          cat > errors/performance-errors.json <<'EOF'
+          {
+            "stage": "performance-chaos",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "errors": []
+          }
+          EOF
+          
+          # Check k6 thresholds
+          if [ -f "logs/k6-output.txt" ] && grep -q "threshold" logs/k6-output.txt; then
+            THRESHOLD_FAILS=$(grep -c "✗" logs/k6-output.txt || echo "0")
+            if [ "$THRESHOLD_FAILS" -gt "0" ]; then
+              jq --arg count "$THRESHOLD_FAILS" '.errors += [{
+                "category": "performance",
+                "severity": "MEDIUM",
+                "tool": "k6",
+                "message": "\($count) performance thresholds exceeded",
+                "recommendation": "Review logs/k6-output.txt and optimize application performance"
+              }]' errors/performance-errors.json > errors/performance-errors.tmp && mv errors/performance-errors.tmp errors/performance-errors.json
+            fi
+          fi
+      
+      - name: Check for errors
+        id: error-check
+        if: always()
+        run: |
+          ERROR_COUNT=$(jq '.errors | length' errors/performance-errors.json 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "has-errors=true" >> $GITHUB_OUTPUT
+          else
+            echo "has-errors=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Upload performance results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: performance-chaos-results
-          path: logs/
+          path: |
+            logs/
+            errors/
 
-  # ==================== STAGE 7: COMPLIANCE & REPORTING ====================
-  compliance-report:
-    name: 📊 Compliance Dashboard & Reporting
+  # ==================== STAGE 7: ERROR AGGREGATION & FINAL REPORT ====================
+  error-aggregation:
+    name: 📊 Error Aggregation & Final Report
     runs-on: ubuntu-latest
-    needs: [runtime-security, integration-testing, performance-chaos]
+    needs: [build-and-scan, manifest-validation, k8s-deployment, runtime-security, integration-testing, performance-chaos]
     if: always()
     steps:
       - uses: actions/checkout@v4
       
-      - name: Download all artifacts
+      - name: Download all error artifacts
         uses: actions/download-artifact@v4
         with:
           path: all-results
+        continue-on-error: true
       
-      - name: Generate Compliance Dashboard
+      - name: 🎯 Aggregate All Errors
         run: |
           mkdir -p final-report
           
-          cat <<'EOF' > final-report/index.html
+          # Combine all error files
+          jq -s '.' all-results/*/errors/*.json 2>/dev/null > final-report/all-errors.json || echo "[]" > final-report/all-errors.json
+          
+          # Generate error summary
+          cat > final-report/error-summary.json <<'EOF'
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow_run": "${{ github.run_id }}",
+            "commit": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "summary": {
+              "total_errors": 0,
+              "critical": 0,
+              "high": 0,
+              "medium": 0,
+              "low": 0
+            },
+            "by_category": {},
+            "by_stage": {},
+            "by_tool": {},
+            "all_errors": []
+          }
+          EOF
+          
+          # Process errors
+          if [ -f "final-report/all-errors.json" ]; then
+            # Count by severity
+            CRITICAL=$(jq '[.[] | .errors[] | select(.severity=="CRITICAL")] | length' final-report/all-errors.json)
+            HIGH=$(jq '[.[] | .errors[] | select(.severity=="HIGH")] | length' final-report/all-errors.json)
+            MEDIUM=$(jq '[.[] | .errors[] | select(.severity=="MEDIUM")] | length' final-report/all-errors.json)
+            LOW=$(jq '[.[] | .errors[] | select(.severity=="LOW")] | length' final-report/all-errors.json)
+            TOTAL=$((CRITICAL + HIGH + MEDIUM + LOW))
+            
+            # Update summary
+            jq --arg total "$TOTAL" --arg critical "$CRITICAL" --arg high "$HIGH" --arg medium "$MEDIUM" --arg low "$LOW" \
+              '.summary.total_errors = ($total | tonumber) |
+               .summary.critical = ($critical | tonumber) |
+               .summary.high = ($high | tonumber) |
+               .summary.medium = ($medium | tonumber) |
+               .summary.low = ($low | tonumber)' \
+              final-report/error-summary.json > final-report/error-summary.tmp && mv final-report/error-summary.tmp final-report/error-summary.json
+            
+            # Group by category
+            jq '[.[] | .errors[]] | group_by(.category) | map({(.[0].category): length}) | add' \
+              final-report/all-errors.json > final-report/by-category.json
+            
+            # Group by stage
+            jq 'group_by(.stage) | map({(.[0].stage): (.[] | .errors | length)}) | add' \
+              final-report/all-errors.json > final-report/by-stage.json
+            
+            # Group by tool
+            jq '[.[] | .errors[]] | group_by(.tool) | map({(.[0].tool): length}) | add' \
+              final-report/all-errors.json > final-report/by-tool.json
+            
+            # Add grouped data to summary
+            jq --slurpfile cat final-report/by-category.json \
+               --slurpfile stage final-report/by-stage.json \
+               --slurpfile tool final-report/by-tool.json \
+               '.by_category = $cat[0] | .by_stage = $stage[0] | .by_tool = $tool[0]' \
+              final-report/error-summary.json > final-report/error-summary.tmp && mv final-report/error-summary.tmp final-report/error-summary.json
+            
+            # Flatten all errors
+            jq '[.[] | .errors[] | . + {stage: (.stage // "unknown")}]' \
+              final-report/all-errors.json > final-report/errors-flat.json
+            
+            jq --slurpfile errors final-report/errors-flat.json '.all_errors = $errors[0]' \
+              final-report/error-summary.json > final-report/error-summary.tmp && mv final-report/error-summary.tmp final-report/error-summary.json
+          fi
+          
+          # Display summary
+          echo "=== ERROR SUMMARY ==="
+          jq -r '.summary' final-report/error-summary.json
+          echo ""
+          echo "=== ERRORS BY SEVERITY ==="
+          jq -r '.all_errors | group_by(.severity) | map("\(.length) \(.[0].severity) errors") | .[]' final-report/error-summary.json
+          echo ""
+          echo "=== ERRORS BY CATEGORY ==="
+          jq -r '.by_category | to_entries | map("\(.key): \(.value)") | .[]' final-report/error-summary.json
+      
+      - name: 📄 Generate Final HTML Report
+        run: |
+          # Get error data
+          TOTAL_ERRORS=$(jq '.summary.total_errors' final-report/error-summary.json)
+          CRITICAL_ERRORS=$(jq '.summary.critical' final-report/error-summary.json)
+          HIGH_ERRORS=$(jq '.summary.high' final-report/error-summary.json)
+          MEDIUM_ERRORS=$(jq '.summary.medium' final-report/error-summary.json)
+          
+          # Determine overall status
+          if [ "$CRITICAL_ERRORS" -gt "0" ]; then
+            OVERALL_STATUS="CRITICAL"
+            STATUS_COLOR="#f56565"
+            STATUS_EMOJI="🚨"
+          elif [ "$HIGH_ERRORS" -gt "0" ]; then
+            OVERALL_STATUS="WARNING"
+            STATUS_COLOR="#ed8936"
+            STATUS_EMOJI="⚠️"
+          elif [ "$TOTAL_ERRORS" -gt "0" ]; then
+            OVERALL_STATUS="ATTENTION"
+            STATUS_COLOR="#ecc94b"
+            STATUS_EMOJI="⚡"
+          else
+            OVERALL_STATUS="SUCCESS"
+            STATUS_COLOR="#48bb78"
+            STATUS_EMOJI="✅"
+          fi
+          
+          cat > final-report/index.html <<'HTMLEOF'
           <!DOCTYPE html>
           <html lang="ru">
           <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>K8s Integration Test Report - 3XUI</title>
+            <title>K8s Test Report - 3XUI | ${{ github.run_id }}</title>
             <style>
               * { margin: 0; padding: 0; box-sizing: border-box; }
               body { 
@@ -607,21 +1120,35 @@ jobs:
                 box-shadow: 0 20px 60px rgba(0,0,0,0.3);
                 padding: 40px;
               }
+              .header {
+                text-align: center;
+                margin-bottom: 40px;
+                padding-bottom: 30px;
+                border-bottom: 3px solid #e2e8f0;
+              }
               h1 { 
                 color: #2d3748; 
                 margin-bottom: 10px;
                 font-size: 2.5em;
-                text-align: center;
               }
               .subtitle {
-                text-align: center;
                 color: #718096;
-                margin-bottom: 40px;
                 font-size: 1.1em;
+              }
+              .status-banner {
+                background: STATUS_COLOR_PLACEHOLDER;
+                color: white;
+                padding: 20px;
+                border-radius: 15px;
+                text-align: center;
+                font-size: 1.5em;
+                font-weight: bold;
+                margin-bottom: 30px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
               }
               .metrics {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
                 gap: 20px;
                 margin-bottom: 40px;
               }
@@ -633,6 +1160,10 @@ jobs:
                 box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
                 transition: transform 0.3s;
               }
+              .metric-card.critical { background: linear-gradient(135deg, #f56565 0%, #c53030 100%); }
+              .metric-card.high { background: linear-gradient(135deg, #ed8936 0%, #c05621 100%); }
+              .metric-card.medium { background: linear-gradient(135deg, #ecc94b 0%, #d69e2e 100%); }
+              .metric-card.success { background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); }
               .metric-card:hover {
                 transform: translateY(-5px);
               }
@@ -665,31 +1196,108 @@ jobs:
                 color: #667eea;
                 margin-right: 10px;
               }
-              .test-item {
+              .error-item {
                 background: white;
-                padding: 15px;
-                margin: 10px 0;
-                border-radius: 8px;
-                border-left: 4px solid #48bb78;
+                padding: 20px;
+                margin: 15px 0;
+                border-radius: 12px;
+                border-left: 6px solid #f56565;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+              }
+              .error-item.critical { border-left-color: #f56565; }
+              .error-item.high { border-left-color: #ed8936; }
+              .error-item.medium { border-left-color: #ecc94b; }
+              .error-item.low { border-left-color: #4299e1; }
+              .error-header {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+                margin-bottom: 10px;
               }
-              .test-item.warning {
-                border-left-color: #ed8936;
+              .error-category {
+                font-weight: bold;
+                color: #2d3748;
+                font-size: 1.1em;
               }
-              .test-item.failed {
-                border-left-color: #f56565;
-              }
-              .badge {
+              .error-badge {
                 padding: 5px 15px;
                 border-radius: 20px;
                 font-size: 0.85em;
                 font-weight: bold;
               }
-              .badge.success { background: #c6f6d5; color: #22543d; }
-              .badge.warning { background: #feebc8; color: #7c2d12; }
-              .badge.failed { background: #fed7d7; color: #742a2a; }
+              .badge.critical { background: #fed7d7; color: #742a2a; }
+              .badge.high { background: #feebc8; color: #7c2d12; }
+              .badge.medium { background: #fefcbf; color: #744210; }
+              .badge.low { background: #bee3f8; color: #2c5282; }
+              .error-message {
+                color: #4a5568;
+                margin: 10px 0;
+                line-height: 1.6;
+              }
+              .error-tool {
+                display: inline-block;
+                background: #edf2f7;
+                padding: 3px 10px;
+                border-radius: 8px;
+                font-size: 0.85em;
+                color: #4a5568;
+                margin-right: 10px;
+              }
+              .error-recommendation {
+                background: #e6fffa;
+                border-left: 4px solid #38b2ac;
+                padding: 15px;
+                margin-top: 15px;
+                border-radius: 8px;
+              }
+              .error-recommendation::before {
+                content: '💡 Рекомендация: ';
+                font-weight: bold;
+                color: #2c7a7b;
+              }
+              .chart-container {
+                background: white;
+                padding: 30px;
+                border-radius: 15px;
+                margin: 20px 0;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+              }
+              .chart-title {
+                font-size: 1.3em;
+                color: #2d3748;
+                margin-bottom: 20px;
+                font-weight: bold;
+              }
+              .bar-chart {
+                display: flex;
+                flex-direction: column;
+                gap: 15px;
+              }
+              .bar-item {
+                display: flex;
+                align-items: center;
+              }
+              .bar-label {
+                min-width: 150px;
+                font-weight: 500;
+                color: #4a5568;
+              }
+              .bar {
+                flex: 1;
+                height: 30px;
+                background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                border-radius: 8px;
+                position: relative;
+                transition: width 0.3s;
+              }
+              .bar-value {
+                position: absolute;
+                right: 10px;
+                top: 50%;
+                transform: translateY(-50%);
+                color: white;
+                font-weight: bold;
+              }
               pre {
                 background: #2d3748;
                 color: #e2e8f0;
@@ -704,175 +1312,346 @@ jobs:
                 color: #a0aec0;
                 margin-top: 40px;
                 font-size: 0.9em;
+                padding-top: 30px;
+                border-top: 2px solid #e2e8f0;
+              }
+              .quick-links {
+                display: flex;
+                gap: 15px;
+                flex-wrap: wrap;
+                margin: 20px 0;
+              }
+              .quick-link {
+                background: #667eea;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 10px;
+                text-decoration: none;
+                transition: all 0.3s;
+                font-weight: 500;
+              }
+              .quick-link:hover {
+                background: #5a67d8;
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+              }
+              table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+              }
+              th, td {
+                padding: 12px;
+                text-align: left;
+                border-bottom: 1px solid #e2e8f0;
+              }
+              th {
+                background: #edf2f7;
+                font-weight: 600;
+                color: #2d3748;
+              }
+              tr:hover {
+                background: #f7fafc;
+              }
+              .no-errors {
+                text-align: center;
+                padding: 60px 20px;
+                color: #48bb78;
+                font-size: 1.5em;
+              }
+              .no-errors::before {
+                content: '🎉';
+                display: block;
+                font-size: 4em;
+                margin-bottom: 20px;
               }
             </style>
           </head>
           <body>
             <div class="container">
-              <h1>🚀 Kubernetes Integration Test Report</h1>
-              <div class="subtitle">3XUI StatefulSet - Comprehensive Security & Quality Assessment</div>
+              <div class="header">
+                <h1>STATUS_EMOJI_PLACEHOLDER Kubernetes Test Report</h1>
+                <div class="subtitle">3XUI StatefulSet - Run #${{ github.run_id }}</div>
+              </div>
               
-              <div class="metrics">
-                <div class="metric-card">
-                  <div class="metric-label">Security Scans</div>
-                  <div class="metric-value">7</div>
-                  <div>Tools Executed</div>
-                </div>
-                <div class="metric-card">
-                  <div class="metric-label">Test Stages</div>
-                  <div class="metric-value">7</div>
-                  <div>Pipeline Phases</div>
-                </div>
-                <div class="metric-card">
-                  <div class="metric-label">Coverage</div>
-                  <div class="metric-value">95%</div>
-                  <div>Security Posture</div>
-                </div>
-                <div class="metric-card">
-                  <div class="metric-label">Compliance</div>
-                  <div class="metric-value">CIS</div>
-                  <div>Benchmark Tested</div>
+              <div class="status-banner">
+                STATUS_EMOJI_PLACEHOLDER OVERALL_STATUS_PLACEHOLDER
+              </div>
+              
+              <div class="quick-links">
+                <a href="#summary" class="quick-link">📊 Summary</a>
+                <a href="#errors" class="quick-link">🚨 Errors</a>
+                <a href="#charts" class="quick-link">📈 Charts</a>
+                <a href="#recommendations" class="quick-link">💡 Recommendations</a>
+                <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" class="quick-link" target="_blank">🔗 View Workflow</a>
+              </div>
+              
+              <div id="summary">
+                <div class="metrics">
+                  <div class="metric-card">
+                    <div class="metric-label">Total Errors</div>
+                    <div class="metric-value">TOTAL_ERRORS_PLACEHOLDER</div>
+                  </div>
+                  <div class="metric-card critical">
+                    <div class="metric-label">Critical</div>
+                    <div class="metric-value">CRITICAL_ERRORS_PLACEHOLDER</div>
+                  </div>
+                  <div class="metric-card high">
+                    <div class="metric-label">High</div>
+                    <div class="metric-value">HIGH_ERRORS_PLACEHOLDER</div>
+                  </div>
+                  <div class="metric-card medium">
+                    <div class="metric-label">Medium</div>
+                    <div class="metric-value">MEDIUM_ERRORS_PLACEHOLDER</div>
+                  </div>
                 </div>
               </div>
               
-              <div class="section">
-                <h2>Build & Security Scanning</h2>
-                <div class="test-item">
-                  <span>🔒 Trivy Container Scan</span>
-                  <span class="badge success">PASSED</span>
+              <div id="charts">
+                <div class="chart-container">
+                  <div class="chart-title">📊 Errors by Stage</div>
+                  <div class="bar-chart" id="stage-chart"></div>
                 </div>
-                <div class="test-item">
-                  <span>📦 SBOM Generation (Syft)</span>
-                  <span class="badge success">PASSED</span>
+                
+                <div class="chart-container">
+                  <div class="chart-title">🔧 Errors by Tool</div>
+                  <div class="bar-chart" id="tool-chart"></div>
                 </div>
-                <div class="test-item">
-                  <span>🔐 Grype Vulnerability Scan</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-              </div>
-              
-              <div class="section">
-                <h2>Manifest Validation</h2>
-                <div class="test-item">
-                  <span>✅ Kubeconform YAML Validation</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>⚠️ Pluto Deprecated API Check</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🔐 Checkov IaC Security</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🛡️ Kubesec Risk Analysis</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🎯 Kyverno Policy Enforcement</span>
-                  <span class="badge success">PASSED</span>
+                
+                <div class="chart-container">
+                  <div class="chart-title">📋 Errors by Category</div>
+                  <div class="bar-chart" id="category-chart"></div>
                 </div>
               </div>
               
-              <div class="section">
-                <h2>Runtime Security</h2>
-                <div class="test-item">
-                  <span>🚨 CIS Benchmark (kube-bench)</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🎯 Polaris Best Practices</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🛡️ Falco Threat Detection</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-              </div>
-              
-              <div class="section">
-                <h2>Integration & E2E Testing</h2>
-                <div class="test-item">
-                  <span>🔌 Network Connectivity</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>⚡ Health Checks</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🗄️ Storage Validation</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-              </div>
-              
-              <div class="section">
-                <h2>Performance & Chaos</h2>
-                <div class="test-item">
-                  <span>📊 k6 Load Testing</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-                <div class="test-item">
-                  <span>🌪️ LitmusChaos Resilience</span>
-                  <span class="badge success">PASSED</span>
-                </div>
-              </div>
-              
-              <div class="section">
-                <h2>📋 Test Artifacts</h2>
-                <p>Все результаты тестирования доступны в артефактах GitHub Actions:</p>
-                <ul style="margin: 15px 0 0 25px; line-height: 2;">
-                  <li>build-scan-results - Сканирование образов и SBOM</li>
-                  <li>manifest-validation-results - Валидация манифестов</li>
-                  <li>runtime-security-results - Runtime безопасность</li>
-                  <li>integration-test-results - Интеграционные тесты</li>
-                  <li>performance-chaos-results - Нагрузочное и chaos тестирование</li>
-                </ul>
+              <div id="errors" class="section">
+                <h2>Detailed Error Report</h2>
+                <div id="error-list"></div>
               </div>
               
               <div class="timestamp">
-                Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC') | Workflow: GitHub Actions | Repository: 3xui-k8s-statefulset
+                Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC') | Workflow Run: ${{ github.run_id }} | Commit: ${{ github.sha }}
               </div>
             </div>
+            
+            <script>
+              const errorData = ERROR_DATA_PLACEHOLDER;
+              
+              // Render charts
+              function renderChart(containerId, data) {
+                const container = document.getElementById(containerId);
+                if (!data || Object.keys(data).length === 0) {
+                  container.innerHTML = '<p style="text-align:center;color:#a0aec0;">No data available</p>';
+                  return;
+                }
+                
+                const max = Math.max(...Object.values(data));
+                Object.entries(data).forEach(([key, value]) => {
+                  const width = (value / max) * 100;
+                  container.innerHTML += `
+                    <div class="bar-item">
+                      <div class="bar-label">${key}</div>
+                      <div class="bar" style="width: ${width}%">
+                        <div class="bar-value">${value}</div>
+                      </div>
+                    </div>
+                  `;
+                });
+              }
+              
+              renderChart('stage-chart', errorData.by_stage);
+              renderChart('tool-chart', errorData.by_tool);
+              renderChart('category-chart', errorData.by_category);
+              
+              // Render errors
+              const errorList = document.getElementById('error-list');
+              if (errorData.all_errors && errorData.all_errors.length > 0) {
+                errorData.all_errors.forEach(error => {
+                  errorList.innerHTML += `
+                    <div class="error-item ${error.severity.toLowerCase()}">
+                      <div class="error-header">
+                        <div class="error-category">${error.category}</div>
+                        <div class="error-badge badge ${error.severity.toLowerCase()}">${error.severity}</div>
+                      </div>
+                      <div class="error-tool">🔧 ${error.tool}</div>
+                      <div class="error-message">${error.message}</div>
+                      ${error.recommendation ? `<div class="error-recommendation">${error.recommendation}</div>` : ''}
+                    </div>
+                  `;
+                });
+              } else {
+                errorList.innerHTML = '<div class="no-errors">Все тесты прошли успешно!</div>';
+              }
+            </script>
           </body>
           </html>
-          EOF
+          HTMLEOF
+          
+          # Replace placeholders
+          sed -i "s/TOTAL_ERRORS_PLACEHOLDER/$TOTAL_ERRORS/g" final-report/index.html
+          sed -i "s/CRITICAL_ERRORS_PLACEHOLDER/$CRITICAL_ERRORS/g" final-report/index.html
+          sed -i "s/HIGH_ERRORS_PLACEHOLDER/$HIGH_ERRORS/g" final-report/index.html
+          sed -i "s/MEDIUM_ERRORS_PLACEHOLDER/$MEDIUM_ERRORS/g" final-report/index.html
+          sed -i "s/OVERALL_STATUS_PLACEHOLDER/$OVERALL_STATUS/g" final-report/index.html
+          sed -i "s/STATUS_COLOR_PLACEHOLDER/$STATUS_COLOR/g" final-report/index.html
+          sed -i "s/STATUS_EMOJI_PLACEHOLDER/$STATUS_EMOJI/g" final-report/index.html
+          
+          # Inject error data as JavaScript
+          ERROR_JSON=$(cat final-report/error-summary.json | jq -c '.')
+          sed -i "s|ERROR_DATA_PLACEHOLDER|$ERROR_JSON|g" final-report/index.html
       
-      - name: Upload compliance report
+      - name: 📝 Generate Text Report
+        run: |
+          cat > final-report/ERRORS.md <<'EOF'
+          # 🚨 Kubernetes Testing Error Report
+          
+          **Workflow Run:** ${{ github.run_id }}
+          **Commit:** ${{ github.sha }}
+          **Branch:** ${{ github.ref_name }}
+          **Generated:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ---
+          
+          ## 📊 Executive Summary
+          
+          EOF
+          
+          # Add summary stats
+          jq -r '
+          "### Error Counts\n\n" +
+          "- **Total Errors:** \(.summary.total_errors)\n" +
+          "- **Critical:** \(.summary.critical)\n" +
+          "- **High:** \(.summary.high)\n" +
+          "- **Medium:** \(.summary.medium)\n" +
+          "- **Low:** \(.summary.low)\n\n" +
+          "---\n\n" +
+          "## 🎯 Errors by Category\n\n" +
+          (.by_category | to_entries | map("- **\(.key):** \(.value)") | join("\n")) +
+          "\n\n---\n\n" +
+          "## 📋 Errors by Stage\n\n" +
+          (.by_stage | to_entries | map("- **\(.key):** \(.value)") | join("\n")) +
+          "\n\n---\n\n" +
+          "## 🔧 Errors by Tool\n\n" +
+          (.by_tool | to_entries | map("- **\(.key):** \(.value)") | join("\n")) +
+          "\n\n---\n\n" +
+          "## 🚨 Detailed Error List\n\n"
+          ' final-report/error-summary.json >> final-report/ERRORS.md
+          
+          # Add detailed errors
+          jq -r '
+          .all_errors[] |
+          "### [\(.severity)] \(.category)\n\n" +
+          "- **Tool:** \(.tool)\n" +
+          "- **Message:** \(.message)\n" +
+          (if .recommendation then "- **Recommendation:** \(.recommendation)\n" else "" end) +
+          "\n---\n\n"
+          ' final-report/error-summary.json >> final-report/ERRORS.md || echo "No errors found" >> final-report/ERRORS.md
+          
+          # Display report
+          cat final-report/ERRORS.md
+      
+      - name: Upload Final Report
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: compliance-dashboard
+          name: final-error-report
           path: final-report/
       
-      - name: Collect all logs
-        run: |
-          mkdir -p consolidated-logs
-          find all-results -type f \( -name "*.txt" -o -name "*.json" -o -name "*.yaml" \) -exec cp {} consolidated-logs/ \; 2>/dev/null || true
-      
-      - name: Upload consolidated logs
-        uses: actions/upload-artifact@v4
+      - name: 💬 Comment on PR with Error Summary
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
         with:
-          name: all-test-logs
-          path: consolidated-logs/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const errorSummary = JSON.parse(fs.readFileSync('final-report/error-summary.json', 'utf8'));
+            
+            let emoji = '✅';
+            let status = 'SUCCESS';
+            if (errorSummary.summary.critical > 0) {
+              emoji = '🚨';
+              status = 'CRITICAL';
+            } else if (errorSummary.summary.high > 0) {
+              emoji = '⚠️';
+              status = 'WARNING';
+            } else if (errorSummary.summary.total_errors > 0) {
+              emoji = '⚡';
+              status = 'ATTENTION';
+            }
+            
+            const body = `
+            ## ${emoji} Kubernetes Test Report - ${status}
+            
+            ### 📊 Summary
+            - **Total Errors:** ${errorSummary.summary.total_errors}
+            - **Critical:** ${errorSummary.summary.critical}
+            - **High:** ${errorSummary.summary.high}
+            - **Medium:** ${errorSummary.summary.medium}
+            
+            ### 🔗 Quick Links
+            - [View Full Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [Download Error Report Artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts)
+            
+            ${errorSummary.summary.total_errors > 0 ? `
+            ### 🚨 Top Issues
+            ${errorSummary.all_errors.slice(0, 5).map(e => `- **[${e.severity}]** ${e.category}: ${e.message}`).join('\n')}
+            
+            *See full report artifact for complete details and recommendations.*
+            ` : '### 🎉 All tests passed successfully!'}
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+      
+      - name: ❌ Fail workflow if critical errors found
+        if: always()
+        run: |
+          CRITICAL=$(jq '.summary.critical' final-report/error-summary.json)
+          if [ "$CRITICAL" -gt "0" ]; then
+            echo "::error::Found $CRITICAL critical errors. Failing workflow."
+            exit 1
+          fi
 
   # ==================== FINAL: STATUS NOTIFICATION ====================
   notify-status:
     name: 📢 Build Status
     runs-on: ubuntu-latest
-    needs: [compliance-report]
+    needs: [error-aggregation]
     if: always()
     steps:
-      - name: Success notification
-        if: success()
-        run: |
-          echo "✅ Kubernetes Integration Test - SUCCESS"
-          echo "All security scans, validations, and tests passed!"
-          echo "Compliance dashboard available in artifacts"
+      - name: Download error report
+        uses: actions/download-artifact@v4
+        with:
+          name: final-error-report
+          path: final-report
+        continue-on-error: true
       
-      - name: Failure notification
-        if: failure()
+      - name: Display Final Status
         run: |
-          echo "❌ Kubernetes Integration Test - FAILED"
-          echo "Check test logs for details"
-          exit 1
+          if [ -f "final-report/error-summary.json" ]; then
+            TOTAL=$(jq '.summary.total_errors' final-report/error-summary.json)
+            CRITICAL=$(jq '.summary.critical' final-report/error-summary.json)
+            
+            echo "========================================="
+            echo "   KUBERNETES TESTING FINAL REPORT"
+            echo "========================================="
+            echo ""
+            jq -r '"Total Errors: \(.summary.total_errors)\nCritical: \(.summary.critical)\nHigh: \(.summary.high)\nMedium: \(.summary.medium)"' final-report/error-summary.json
+            echo ""
+            echo "========================================="
+            
+            if [ "$CRITICAL" -gt "0" ]; then
+              echo "❌ WORKFLOW FAILED - CRITICAL ERRORS FOUND"
+              exit 1
+            elif [ "$TOTAL" -eq "0" ]; then
+              echo "✅ WORKFLOW SUCCESS - NO ERRORS"
+            else
+              echo "⚠️ WORKFLOW COMPLETED WITH WARNINGS"
+            fi
+          else
+            echo "✅ Workflow completed"
+          fi
