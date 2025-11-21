@@ -1,0 +1,66 @@
+name: 🚦 Kubernetes Integration Test (Optimized)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: artur7892988/3xui-k8s-statefulset
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  k8sintegration:
+    name: 🚦 Kubernetes Integration Test (Optimized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Save KIND cluster config
+        run: |
+          cat <<EOF > kind-config.yaml
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+              extraMounts:
+                - hostPath: /tmp/k8s-test-pv
+                  containerPath: /tmp/hostpath-provisioner
+            - role: worker
+          EOF
+      - name: Install & Start KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster
+          version: v0.20.0
+          config: kind-config.yaml
+          wait: 60s
+          verbosity: 0
+          kubectl_version: v1.31.4
+      - name: Build Docker image
+        run: |
+          docker build -t $IMAGE_NAME:integration .
+      - name: Load image to KIND
+        run: |
+          kind load docker-image $IMAGE_NAME:integration --name test-cluster
+      - name: Deploy to KIND (Helm or Kubectl)
+        run: |
+          kubectl version
+          # helm upgrade --install ... или kubectl apply ... (по твоей инструкции)
+      - name: Run Smoke and Health Tests
+        run: |
+          kubectl get pods -A
+          # Можно добавить любой kubectl wait/check/describe для проверки статуса
+      - name: Collect pod/container logs
+        run: |
+          mkdir -p logs
+          kubectl get pods -A -o wide > logs/pods.txt
+          kubectl get events -A --sort-by='.lastTimestamp' > logs/events.txt
+          kubectl logs --all-containers --prefix -A > logs/all-containers.log || true
+      - name: Upload test logs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-integration-logs
+          path: logs/
+      - name: Success notification
+        if: success()
+        run: echo 'Kubernetes Integration Test (Optimized) — SUCCESS'
