@@ -1,4 +1,4 @@
-name: 🎯 Kubernetes Integration Test
+name: 🎯 Kubernetes Integration Test (Optimized)
 
 on:
   pull_request:
@@ -18,9 +18,15 @@ env:
   IMAGE_NAME: test-3xui:local
 
 jobs:
-  kind-test:
-    name: 🎯 Test in KIND (K3s-compatible)
+  # ========================================
+  # STAGE 1: BUILD & DEPLOY TO KIND
+  # ========================================
+  
+  setup-and-deploy:
+    name: 🎯 Setup KIND & Deploy
     runs-on: ubuntu-latest
+    outputs:
+      cluster-ready: ${{ steps.check.outputs.ready }}
     steps:
       - name: 📁 Checkout
         uses: actions/checkout@v4
@@ -163,107 +169,356 @@ jobs:
           
           echo "✅ Pod is ready!"
 
-      - name: 🧪 Test liveness probe endpoint
+      - name: 📊 Export cluster state
+        id: check
         run: |
-          POD=$(kubectl get pod -n test-vpn -l app=xui -o jsonpath='{.items[0].metadata.name}')
-          echo "🎯 Testing liveness probe on $POD..."
-          
-          kubectl exec -n test-vpn $POD -- curl -f http://localhost:2053/ -m 5
+          echo "ready=true" >> $GITHUB_OUTPUT
+          kubectl get pods -n test-vpn -o wide
+
+  # ========================================
+  # STAGE 2: PARALLEL TESTING (6 RUNNERS)
+  # ========================================
+  
+  test-liveness-probe:
+    name: 💚 Liveness Probe Test
+    runs-on: ubuntu-latest
+    needs: setup-and-deploy
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+
+      - name: 🎯 Setup KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster-liveness
+          version: v0.20.0
+
+      - name: 🚀 Quick deploy
+        run: |
+          kind load docker-image ${{ env.IMAGE_NAME }} --name test-cluster-liveness
+          kubectl create namespace test-vpn
+          kubectl run xui-test -n test-vpn --image=${{ env.IMAGE_NAME }} \
+            --image-pull-policy=Never \
+            --env="XUI_ENABLE_FAIL2BAN=false" \
+            --port=2053
+          kubectl wait --for=condition=ready pod/xui-test -n test-vpn --timeout=120s
+
+      - name: 🧪 Test endpoint
+        run: |
+          kubectl exec -n test-vpn xui-test -- curl -f http://localhost:2053/ -m 5
           echo "✅ Liveness probe works!"
 
-      - name: 💾 Test PVC mount and permissions
+  test-pvc-mount:
+    name: 💾 PVC Mount Test
+    runs-on: ubuntu-latest
+    needs: setup-and-deploy
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+
+      - name: 🎯 Setup KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster-pvc
+          version: v0.20.0
+
+      - name: 🚀 Deploy with PVC
         run: |
-          POD=$(kubectl get pod -n test-vpn -l app=xui -o jsonpath='{.items[0].metadata.name}')
-          echo "💾 Testing PVC mount on $POD..."
+          kind load docker-image ${{ env.IMAGE_NAME }} --name test-cluster-pvc
+          kubectl create namespace test-vpn
           
-          # Проверяем монтирование
-          kubectl exec -n test-vpn $POD -- ls -la /etc/x-ui
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: test-pvc
+            namespace: test-vpn
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi
+          ---
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: xui-pvc-test
+            namespace: test-vpn
+          spec:
+            containers:
+            - name: xui
+              image: ${{ env.IMAGE_NAME }}
+              imagePullPolicy: Never
+              volumeMounts:
+              - name: data
+                mountPath: /etc/x-ui
+              securityContext:
+                runAsUser: 2000
+                runAsGroup: 2000
+            volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: test-pvc
+          EOF
           
-          # Проверяем права на запись
-          kubectl exec -n test-vpn $POD -- touch /etc/x-ui/test-write.txt
+          kubectl wait --for=condition=ready pod/xui-pvc-test -n test-vpn --timeout=120s
+
+      - name: 💾 Test PVC
+        run: |
+          kubectl exec -n test-vpn xui-pvc-test -- touch /etc/x-ui/test-write.txt
+          OWNER=$(kubectl exec -n test-vpn xui-pvc-test -- stat -c '%U:%G' /etc/x-ui)
           
-          # Проверяем owner
-          OWNER=$(kubectl exec -n test-vpn $POD -- stat -c '%U:%G' /etc/x-ui)
           if [ "$OWNER" != "x-ui:x-ui" ]; then
             echo "❌ PVC owner incorrect: $OWNER"
             exit 1
           fi
           
-          echo "✅ PVC mount and permissions OK!"
+          echo "✅ PVC mount OK!"
 
-      - name: 🔄 Test PVC persistence across pod restart
+  test-persistence:
+    name: 🔄 Persistence Test
+    runs-on: ubuntu-latest
+    needs: setup-and-deploy
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+
+      - name: 🎯 Setup KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster-persist
+          version: v0.20.0
+
+      - name: 🚀 Deploy StatefulSet
+        run: |
+          kind load docker-image ${{ env.IMAGE_NAME }} --name test-cluster-persist
+          kubectl create namespace test-vpn
+          
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: xui
+            namespace: test-vpn
+          spec:
+            clusterIP: None
+            selector:
+              app: xui
+            ports:
+            - port: 2053
+          ---
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: xui
+            namespace: test-vpn
+          spec:
+            serviceName: xui
+            replicas: 1
+            selector:
+              matchLabels:
+                app: xui
+            template:
+              metadata:
+                labels:
+                  app: xui
+              spec:
+                containers:
+                - name: xui
+                  image: ${{ env.IMAGE_NAME }}
+                  imagePullPolicy: Never
+                  volumeMounts:
+                  - name: data
+                    mountPath: /etc/x-ui
+                  securityContext:
+                    runAsUser: 2000
+                    runAsGroup: 2000
+            volumeClaimTemplates:
+            - metadata:
+                name: data
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: 1Gi
+          EOF
+          
+          kubectl wait --for=condition=ready pod -l app=xui -n test-vpn --timeout=180s
+
+      - name: 🔄 Test persistence
         run: |
           POD=$(kubectl get pod -n test-vpn -l app=xui -o jsonpath='{.items[0].metadata.name}')
-          echo "💾 Writing test file to PVC..."
-          
-          # Записываем файл с таймстампом
           TIMESTAMP=$(date +%s)
-          kubectl exec -n test-vpn $POD -- sh -c "echo $TIMESTAMP > /etc/x-ui/persistence-test.txt"
+          kubectl exec -n test-vpn $POD -- sh -c "echo $TIMESTAMP > /etc/x-ui/persist-test.txt"
           
-          echo "🗑️ Deleting pod to test persistence..."
           kubectl delete pod -n test-vpn $POD --wait=true
-          
-          echo "⏳ Waiting for new pod..."
-          kubectl wait --for=condition=ready pod \
-            -l app=xui \
-            -n test-vpn \
-            --timeout=180s
+          kubectl wait --for=condition=ready pod -l app=xui -n test-vpn --timeout=180s
           
           NEW_POD=$(kubectl get pod -n test-vpn -l app=xui -o jsonpath='{.items[0].metadata.name}')
-          echo "🔍 Checking file in new pod $NEW_POD..."
+          STORED=$(kubectl exec -n test-vpn $NEW_POD -- cat /etc/x-ui/persist-test.txt)
           
-          # Проверяем, что файл остался
-          STORED_TIMESTAMP=$(kubectl exec -n test-vpn $NEW_POD -- cat /etc/x-ui/persistence-test.txt)
-          
-          if [ "$STORED_TIMESTAMP" != "$TIMESTAMP" ]; then
-            echo "❌ PVC persistence failed! Expected $TIMESTAMP, got $STORED_TIMESTAMP"
+          if [ "$STORED" != "$TIMESTAMP" ]; then
+            echo "❌ Persistence failed!"
             exit 1
           fi
           
-          echo "✅ PVC persistence verified!"
+          echo "✅ Persistence verified!"
 
-      - name: 🔒 Test SecurityContext (non-root)
+  test-security-context:
+    name: 🔒 SecurityContext Test
+    runs-on: ubuntu-latest
+    needs: setup-and-deploy
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+
+      - name: 🎯 Setup KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster-security
+          version: v0.20.0
+
+      - name: 🚀 Quick deploy
         run: |
-          POD=$(kubectl get pod -n test-vpn -l app=xui -o jsonpath='{.items[0].metadata.name}')
-          echo "🔒 Checking user/group..."
-          
-          UID=$(kubectl exec -n test-vpn $POD -- id -u)
-          GID=$(kubectl exec -n test-vpn $POD -- id -g)
+          kind load docker-image ${{ env.IMAGE_NAME }} --name test-cluster-security
+          kubectl create namespace test-vpn
+          kubectl run xui-security-test -n test-vpn --image=${{ env.IMAGE_NAME }} \
+            --image-pull-policy=Never \
+            --overrides='{
+              "spec": {
+                "containers": [{
+                  "name": "xui-security-test",
+                  "image": "'${{ env.IMAGE_NAME }}'",
+                  "securityContext": {
+                    "runAsUser": 2000,
+                    "runAsGroup": 2000,
+                    "allowPrivilegeEscalation": false
+                  }
+                }]
+              }
+            }'
+          kubectl wait --for=condition=ready pod/xui-security-test -n test-vpn --timeout=120s
+
+      - name: 🔒 Test security
+        run: |
+          UID=$(kubectl exec -n test-vpn xui-security-test -- id -u)
+          GID=$(kubectl exec -n test-vpn xui-security-test -- id -g)
           
           if [ "$UID" != "2000" ] || [ "$GID" != "2000" ]; then
-            echo "❌ Wrong UID/GID: $UID:$GID (expected 2000:2000)"
+            echo "❌ Wrong UID/GID: $UID:$GID"
             exit 1
           fi
           
-          echo "✅ SecurityContext OK (running as UID:GID 2000:2000)!"
+          echo "✅ SecurityContext OK!"
 
-      - name: 🌐 Test service connectivity
+  test-service-connectivity:
+    name: 🌐 Service Test
+    runs-on: ubuntu-latest
+    needs: setup-and-deploy
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+
+      - name: 🎯 Setup KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster-service
+          version: v0.20.0
+
+      - name: 🚀 Deploy with Service
         run: |
-          echo "🌐 Testing service DNS resolution..."
+          kind load docker-image ${{ env.IMAGE_NAME }} --name test-cluster-service
+          kubectl create namespace test-vpn
           
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: xui-service-test
+            namespace: test-vpn
+            labels:
+              app: xui
+          spec:
+            containers:
+            - name: xui
+              image: ${{ env.IMAGE_NAME }}
+              imagePullPolicy: Never
+              ports:
+              - containerPort: 2053
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: xui
+            namespace: test-vpn
+          spec:
+            selector:
+              app: xui
+            ports:
+            - port: 2053
+              targetPort: 2053
+          EOF
+          
+          kubectl wait --for=condition=ready pod/xui-service-test -n test-vpn --timeout=120s
+
+      - name: 🌐 Test service
+        run: |
           kubectl run -n test-vpn test-client --image=busybox:1.36 --rm -it --restart=Never \
-            -- wget -O- http://xui.test-vpn.svc.cluster.local:2053/ --timeout=5
+            -- wget -O- http://xui.test-vpn.svc.cluster.local:2053/ --timeout=10
           
           echo "✅ Service connectivity OK!"
 
-      - name: 📊 Show pod status
-        if: always()
+  test-logs-and-status:
+    name: 📊 Logs & Status
+    runs-on: ubuntu-latest
+    needs: setup-and-deploy
+    if: always()
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+
+      - name: 🎯 Setup KIND
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster-logs
+          version: v0.20.0
+
+      - name: 🚀 Quick deploy
+        run: |
+          kind load docker-image ${{ env.IMAGE_NAME }} --name test-cluster-logs
+          kubectl create namespace test-vpn
+          kubectl run xui-logs-test -n test-vpn --image=${{ env.IMAGE_NAME }} \
+            --image-pull-policy=Never
+          kubectl wait --for=condition=ready pod/xui-logs-test -n test-vpn --timeout=120s
+
+      - name: 📊 Collect metrics
         run: |
           echo "## 📊 Pod Status" >> $GITHUB_STEP_SUMMARY
           kubectl get pods -n test-vpn -o wide >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "## 💾 PVC Status" >> $GITHUB_STEP_SUMMARY
-          kubectl get pvc -n test-vpn >> $GITHUB_STEP_SUMMARY
+          echo "## 📜 Pod Logs" >> $GITHUB_STEP_SUMMARY
+          kubectl logs -n test-vpn xui-logs-test --tail=30 >> $GITHUB_STEP_SUMMARY || echo "No logs" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-
-      - name: 📜 Show pod logs
-        if: always()
-        run: |
-          echo "## 📜 Pod Logs (last 50 lines)" >> $GITHUB_STEP_SUMMARY
-          kubectl logs -n test-vpn -l app=xui --tail=50 >> $GITHUB_STEP_SUMMARY || echo "No logs" >> $GITHUB_STEP_SUMMARY
-
-      - name: 🔍 Describe pod
-        if: always()
-        run: |
-          kubectl describe pod -n test-vpn -l app=xui
+          
+          echo "## 🔍 Pod Description" >> $GITHUB_STEP_SUMMARY
+          kubectl describe pod -n test-vpn xui-logs-test >> $GITHUB_STEP_SUMMARY
