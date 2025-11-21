@@ -9,6 +9,11 @@ on:
     tags:
       - 'v*.*.*'
 
+# Prevent concurrent publishes
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: docker.io
   IMAGE_NAME: artur7892988/3xui-k8s-statefulset
@@ -16,7 +21,12 @@ env:
 jobs:
   docker-publish:
     name: 'Push to Docker Hub'
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'push' }}
+    # Skip workflow_run trigger if it was caused by tag push (prevents double publish)
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && 
+       github.event.workflow_run.conclusion == 'success' && 
+       github.event.workflow_run.event != 'push')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -71,14 +81,20 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta.outputs.version }}
       
-      - name: Update Docker Hub description
-        uses: peter-evans/dockerhub-description@v4
+      - name: Update Docker Hub description (with retry)
+        uses: nick-fields/retry-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ env.IMAGE_NAME }}
-          readme-filepath: ./README.md
-          short-description: "Production-ready 3X-UI VPN panel for Kubernetes StatefulSet deployments"
+          timeout_minutes: 2
+          max_attempts: 3
+          command: |
+            docker run --rm \
+              -e DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }} \
+              -e DOCKERHUB_PASSWORD=${{ secrets.DOCKERHUB_TOKEN }} \
+              -e DOCKERHUB_REPOSITORY=${{ env.IMAGE_NAME }} \
+              -e README_FILEPATH=./README.md \
+              -v "$(pwd):/workspace" \
+              peterevans/dockerhub-description:3
+        continue-on-error: true
       
       - name: Generate summary
         run: |
@@ -97,3 +113,7 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🔗 [View on Docker Hub](https://hub.docker.com/r/${{ env.IMAGE_NAME }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌍 Multi-Arch Support" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ linux/amd64" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ linux/arm64" >> $GITHUB_STEP_SUMMARY
