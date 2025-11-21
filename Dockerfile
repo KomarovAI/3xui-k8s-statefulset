@@ -5,15 +5,16 @@ FROM ghcr.io/mhsanaei/3x-ui:v2.5.3 AS builder
 FROM alpine:3.20
 
 LABEL maintainer="KomarovAI"
-LABEL version="2.5.3-optimized"
+LABEL version="2.5.3-optimized-secure"
 
-RUN apk add --no-cache \
-    ca-certificates=20250911-r0 \
-    tzdata=2025b-r0 \
-    bash=5.2.26-r0 \
-    curl=8.14.1-r2 \
-    gcompat=1.1.0-r4 \
-    libstdc++=13.2.1_git20240309-r1 && \
+RUN apk update && apk upgrade --no-cache && apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    bash \
+    curl>=8.16.0 \
+    c-ares>=1.34.5 \
+    gcompat \
+    libstdc++ && \
     rm -rf /var/cache/apk/*
 
 RUN addgroup -g 2000 x-ui && \
