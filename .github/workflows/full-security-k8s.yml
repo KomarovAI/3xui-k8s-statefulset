@@ -33,6 +33,39 @@ jobs:
           image: 'test-image:local'
           exit-code: '1'
 
+  grype-scan:
+    name: 'Grype - Container Vulnerability Scan'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Build Docker image'
+        run: docker build -t test-image:local .
+      - name: 'Scan image with Grype'
+        uses: anchore/scan-action@v3
+        with:
+          image: 'test-image:local'
+          fail-build: true
+          severity-cutoff: high
+
+  syft-sbom:
+    name: 'Syft - Generate SBOM'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Build Docker image'
+        run: docker build -t test-image:local .
+      - name: 'Generate SBOM (spdx-json)'
+        uses: anchore/sbom-action@v0
+        with:
+          image: test-image:local
+          format: spdx-json
+          output-file: sbom.json
+      - name: 'Upload SBOM as artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-report
+          path: sbom.json
+
   polaris-score:
     name: 'Polaris - K8s Policy Enforcement'
     runs-on: ubuntu-latest
@@ -67,4 +100,28 @@ jobs:
             kubeconform -strict -summary manifests/*.yaml
           else
             echo 'No manifests/ directory found.'
+          fi
+
+  conftest-policy:
+    name: 'Conftest - OPA Policy Check'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 'Install conftest'
+        run: |
+          wget https://github.com/open-policy-agent/conftest/releases/download/v0.49.0/conftest_0.49.0_Linux_x86_64.tar.gz
+          tar -xzf conftest_0.49.0_Linux_x86_64.tar.gz
+          chmod +x conftest
+          sudo mv conftest /usr/local/bin/
+      - name: 'Run conftest on K8s manifests (if policies exist)'
+        run: |
+          if [ -d "policies" ] && [ -d "manifests" ]; then
+            echo "✅ Found policies/ and manifests/ - running conftest"
+            shopt -s nullglob
+            for file in manifests/*.yaml; do
+              echo "Testing $file..."
+              conftest test "$file" --policy policies/ || exit 1
+            done
+          else
+            echo "⚠️ No policies/ or manifests/ directory - skipping conftest"
           fi
