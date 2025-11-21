@@ -4,8 +4,24 @@ FROM ghcr.io/mhsanaei/3x-ui:v2.5.3 AS builder
 # Stage 2: Runtime
 FROM alpine:3.20
 
-LABEL maintainer="KomarovAI"
-LABEL version="2.5.3-optimized-secure"
+# Build-time arguments (passed from CI/CD)
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+# OCI-compliant labels
+LABEL org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.authors="KomarovAI" \
+      org.opencontainers.image.url="https://github.com/KomarovAI/3xui-k8s-statefulset" \
+      org.opencontainers.image.documentation="https://github.com/KomarovAI/3xui-k8s-statefulset/blob/main/README.md" \
+      org.opencontainers.image.source="https://github.com/KomarovAI/3xui-k8s-statefulset" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.vendor="KomarovAI" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.title="3X-UI VPN Panel for Kubernetes" \
+      org.opencontainers.image.description="Production-ready 3X-UI Docker image optimized for Kubernetes StatefulSet deployments" \
+      org.opencontainers.image.base.name="alpine:3.20"
 
 RUN apk update && apk upgrade --no-cache && apk add --no-cache \
     ca-certificates \
