@@ -10,23 +10,60 @@ fileExistenceTests:
   - name: 'Persistent volume directory exists'
     path: '/etc/x-ui'
     shouldExist: true
+  - name: 'Curl binary exists'
+    path: '/usr/bin/curl'
+    shouldExist: true
 commandTests:
   - name: 'User x-ui exists'
     command: 'id'
     args: ['-u', 'x-ui']
     expectedOutput: ['2000']
-  - name: 'App directory is writable'
+  
+  - name: 'Group x-ui exists'
+    command: 'id'
+    args: ['-g', 'x-ui']
+    expectedOutput: ['2000']
+  
+  - name: 'PVC directory is writable'
     command: 'bash'
-    args: ['-c', 'touch /etc/x-ui/testfile; echo $?']
+    args: ['-c', 'touch /etc/x-ui/testfile && rm /etc/x-ui/testfile; echo $?']
     expectedOutput: ['0']
+  
+  - name: 'PVC mount point ownership'
+    command: 'stat'
+    args: ['-c', '%U:%G', '/etc/x-ui']
+    expectedOutput: ['x-ui:x-ui']
+  
   - name: 'Entrypoint is executable'
     command: 'bash'
     args: ['-c', 'test -x /app/DockerEntrypoint.sh && echo OK']
     expectedOutput: ['OK']
+  
   - name: 'Bash version'
     command: 'bash'
     args: ['--version']
     expectedOutput: ['GNU bash, version 5.2.26']
+  
+  - name: 'Curl is available for healthcheck'
+    command: 'curl'
+    args: ['--version']
+    expectedOutput: ['curl 8.']
+  
+  - name: 'SQLite3 database can be created'
+    command: 'bash'
+    args: ['-c', 'cd /tmp && sqlite3 test.db "CREATE TABLE test(id INT);" && rm test.db && echo OK']
+    expectedOutput: ['OK']
+  
+  - name: 'Timezone data available'
+    command: 'bash'
+    args: ['-c', 'test -d /usr/share/zoneinfo && echo OK']
+    expectedOutput: ['OK']
+  
+  - name: 'CA certificates installed'
+    command: 'bash'
+    args: ['-c', 'test -f /etc/ssl/certs/ca-certificates.crt && echo OK']
+    expectedOutput: ['OK']
+
 metadataTest:
   user: 'x-ui'
   exposedPorts: ['2053', '2096']
