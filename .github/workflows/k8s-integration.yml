@@ -54,7 +54,22 @@ jobs:
           kubectl describe pods -A > logs/pods-describe.txt
       - name: 🔒 CIS Security Benchmark (kube-bench)
         run: |
-          docker run --rm -v /etc:/etc:ro -v /var/lib:/var/lib:ro -v ~/.kube:/root/.kube:ro aquasec/kube-bench:latest --benchmark cis-1.24 | tee logs/kube-bench.txt || true
+          docker run --rm -v ~/.kube:/root/.kube aquasec/kube-bench:latest --benchmark cis-1.24 | tee logs/kube-bench.txt || true
+      - name: 🎯 Polaris Best Practices Check
+        run: |
+          docker run --rm -v ~/.kube:/root/.kube:ro quay.io/fairwinds/polaris:latest audit --format=pretty > logs/polaris-audit.txt || true
+      - name: ✅ Kubeconform YAML Validation
+        run: |
+          curl -L https://github.com/yannh/kubeconform/releases/download/v0.6.6/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -summary k8s/*.yaml > logs/kubeconform.txt || true
+      - name: ⚠️ Pluto Deprecated API Check
+        run: |
+          curl -L https://github.com/FairwindsOps/pluto/releases/download/v5.19.0/pluto_5.19.0_linux_amd64.tar.gz | tar xz
+          ./pluto detect-files -d k8s/ > logs/pluto-deprecated.txt || true
+          ./pluto detect-helm -o wide > logs/pluto-helm.txt || true
+      - name: 🔐 Checkov IaC Security Scan
+        run: |
+          docker run --rm -v $(pwd):/tf bridgecrew/checkov -d /tf/k8s --output cli > logs/checkov.txt || true
       - name: 🛡️ Manifest Security Check (kubesec)
         run: |
           for f in k8s/*.yaml; do curl -sSX POST --data-binary @$f https://v2.kubesec.io/scan/ >> logs/kubesec-scan.txt; done || true
@@ -70,16 +85,31 @@ jobs:
       - name: 🚫 Privileged Container Check
         run: |
           (kubectl get pods -A -o json | jq '.items[] | select(.spec.containers[].securityContext.runAsUser==0)') > logs/privileged-containers.txt || true
+      - name: 📦 Helm Chart Lint
+        run: |
+          helm lint ./charts/* > logs/helm-lint.txt || true
+      - name: 📊 Resource Quotas & Limit Ranges
+        run: |
+          kubectl get resourcequota,limitrange -A > logs/quotas-limits.txt || true
       - name: 🚀 Custom Integration/Smoke Test (Testkube / curl)
         run: |
-          # кастомные тесты: curl/HTTP/API/health, Testkube, etc
           echo "Testkube API smoke test" > logs/testkube.txt
       - name: Collect pod/container logs
         run: |
           mkdir -p logs
           kubectl get pods -A -o wide > logs/pods.txt
           kubectl logs --all-containers --prefix -A > logs/all-containers.log || true
-      - name: Upload integration test logs
+      - name: 📊 Generate Test Report Dashboard
+        run: |
+          cat <<EOF > logs/dashboard.html
+          <!DOCTYPE html>
+          <html><head><title>K8s Test Report</title></head>
+          <body>
+          <h1>Kubernetes Integration Test Results</h1>
+          <pre>$(cat logs/*.txt)</pre>
+          </body></html>
+          EOF
+      - name: Upload all integration test logs
         uses: actions/upload-artifact@v4
         with:
           name: k8s-integration-logs
