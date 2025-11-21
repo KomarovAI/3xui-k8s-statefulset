@@ -1,0 +1,12 @@
+# Ультралёгкий Dockerfile для fast build, минимального размера и низкого resource consumption
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=ghcr.io/mhsanaei/3x-ui:v2.5.3 /app/x-ui /app/x-ui
+COPY --from=ghcr.io/mhsanaei/3x-ui:v2.5.3 /app/bin /app/bin
+
+WORKDIR /app
+VOLUME ["/etc/x-ui"]
+EXPOSE 2053
+USER nonroot
+
+ENTRYPOINT ["/app/x-ui"]
