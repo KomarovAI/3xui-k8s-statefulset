@@ -72,12 +72,10 @@ RUN mkdir -p \
         /var/log/xui && \
     chmod -R 750 /etc/x-ui /home/xui /var/log/xui
 
-# Copy custom scripts
-COPY --chown=2000:2000 scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY --chown=2000:2000 scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
-
-# Make scripts executable
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
+# [REMOVED] Custom scripts COPY/CHMOD
+# COPY --chown=2000:2000 scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+# COPY --chown=2000:2000 scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
+# RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Final configuration
@@ -85,7 +83,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
 
 # Healthcheck для раннего обнаружения проблем
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD /usr/local/bin/healthcheck.sh || exit 1
+    CMD pgrep -f x-ui > /dev/null || exit 1
 
 # Switch to non-root user
 USER 2000:2000
@@ -105,4 +103,4 @@ ENV XUI_DATA_DIR=/etc/x-ui \
     XUI_PORT=2053
 
 # Entrypoint
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/app/x-ui"]
