@@ -1,16 +1,5 @@
 name: 🚀 Build, Scan & Push Docker Image
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 🎯 CI PIPELINE - ULTRA OPTIMIZED
-# ═══════════════════════════════════════════════════════════════════════════
-# • Multi-stage Dockerfile build
-# • Trivy security scanning
-# • Docker Scout CVE analysis
-# • Semantic versioning
-# • Push to DockerHub with multiple tags
-# • Auto-update image tag in k3s-infrastructure
-# ═══════════════════════════════════════════════════════════════════════════
-
 on:
   workflow_dispatch:
     inputs:
@@ -20,7 +9,7 @@ on:
         type: string
   push:
     tags:
-      - 'v*.*.*'  # Триггерится только на semantic version tags
+      - 'v*.*.*'
     paths:
       - 'Dockerfile*'
       - 'scripts/**'
@@ -31,9 +20,6 @@ env:
   IMAGE_NAME: artur7892988/3xui-k8s-statefulset
 
 jobs:
-  # ════════════════════════════════════════════════════════════════════════
-  # 🛠️ BUILD JOB - Multi-stage optimization
-  # ════════════════════════════════════════════════════════════════════════
   build-scan-push:
     name: 🛠️ Build, Scan & Push
     runs-on: ubuntu-latest
@@ -41,23 +27,14 @@ jobs:
       contents: write
       security-events: write
       packages: write
-    
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
       image-digest: ${{ steps.build.outputs.digest }}
-    
     steps:
-      # ────────────────────────────────────────────────────────────────────────
-      # 📁 Checkout
-      # ────────────────────────────────────────────────────────────────────────
       - name: 📁 Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🏷️ Docker Metadata - Smart tagging
-      # ────────────────────────────────────────────────────────────────────────
       - name: 🏷️ Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -72,29 +49,19 @@ jobs:
             org.opencontainers.image.description=Production-ready 3X-UI for Kubernetes
             org.opencontainers.image.vendor=KomarovAI
             maintainer=artur.komarovv@gmail.com
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🐳 Docker Setup
-      # ────────────────────────────────────────────────────────────────────────
       - name: 🐳 Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: |
             image=moby/buildkit:v0.12.5
             network=host
-
       - name: 🔐 Login to DockerHub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🛠️ Build & Push - OPTIMIZED!
-      # ────────────────────────────────────────────────────────────────────────
       - name: 🛠️ Build and push Docker image
         id: build
         uses: docker/build-push-action@v5
@@ -111,10 +78,6 @@ jobs:
             BUILDKIT_INLINE_CACHE=1
           provenance: false
           sbom: false
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🔒 Security Scanning - Trivy
-      # ────────────────────────────────────────────────────────────────────────
       - name: 🔒 Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
@@ -123,37 +86,28 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
           exit-code: '0'
-
       - name: 📊 Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
-
       - name: 🔒 Trivy JSON report
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           format: 'json'
           output: 'trivy-report.json'
-
       - name: 📎 Upload Trivy JSON
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: trivy-report
           path: trivy-report.json
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🔍 Image Analysis
-      # ────────────────────────────────────────────────────────────────────────
       - name: 🔍 Analyze image size
         run: |
           docker pull ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          
           SIZE=$(docker inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} --format='{{.Size}}' | numfmt --to=iec-i --suffix=B)
           LAYERS=$(docker inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} --format='{{len .RootFS.Layers}}')
-          
           echo "## 📦 Image Analysis" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
@@ -162,7 +116,6 @@ jobs:
           echo "| **Layers** | $LAYERS |" >> $GITHUB_STEP_SUMMARY
           echo "| **Tags** | ${{ steps.meta.outputs.tags }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Digest** | ${{ steps.build.outputs.digest }} |" >> $GITHUB_STEP_SUMMARY
-
       - name: 🔍 Docker Scout CVEs
         uses: docker/scout-action@v1
         if: github.event_name != 'pull_request'
@@ -171,36 +124,6 @@ jobs:
           image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           only-severities: critical,high
           exit-code: false
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🔄 Update k3s-infrastructure
-      # ────────────────────────────────────────────────────────────────────────
-      - name: 🔄 Update image tag in k3s-infrastructure
-        env:
-          GH_TOKEN: ${{ secrets.K3S_INFRA_PAT }}
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Clone k3s-infrastructure
-          git clone https://x-access-token:${GH_TOKEN}@github.com/KomarovAI/k3s-infrastructure.git
-          cd k3s-infrastructure
-          
-          # Update image tag in StatefulSet
-          sed -i "s|image: ${{ env.IMAGE_NAME }}:.*|image: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}|g" \
-            manifests/apps/3xui-vpn/base/statefulset.yaml
-          
-          # Commit and push
-          git add manifests/apps/3xui-vpn/base/statefulset.yaml
-          git commit -m "chore: Update 3X-UI image to ${{ steps.meta.outputs.version }}" || exit 0
-          git push
-          
-          echo "## ✅ Updated k3s-infrastructure" >> $GITHUB_STEP_SUMMARY
-          echo "Image tag updated to: **${{ steps.meta.outputs.version }}**" >> $GITHUB_STEP_SUMMARY
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 🎉 Create GitHub Release
-      # ────────────────────────────────────────────────────────────────────────
       - name: 🎉 Create GitHub Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
@@ -208,23 +131,16 @@ jobs:
           name: Release ${{ steps.meta.outputs.version }}
           body: |
             ## 🚀 Docker Image
-            
             ```bash
             docker pull ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
             ```
-            
             **Tags:**
             ${{ steps.meta.outputs.tags }}
-            
             **Digest:**
             `${{ steps.build.outputs.digest }}`
-            
             ## 🔒 Security Scan
-            
             See attached Trivy report for vulnerability details.
-            
             ## 🔄 Deployment
-            
             FluxCD will automatically deploy this version to the cluster within 1 minute.
           files: |
             trivy-report.json
