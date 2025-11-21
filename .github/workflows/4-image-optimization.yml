@@ -1,0 +1,86 @@
+name: "🎯 Image Optimization Analysis"
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Каждый понедельник в 2:00 AM
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: test-image:local
+  DIVE_VERSION: 0.12.0
+
+jobs:
+  dive-analysis:
+    name: 'Dive - Layer Analysis'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build fresh image
+        run: docker build -t ${{ env.IMAGE_NAME }} .
+      
+      - name: Install Dive
+        run: |
+          wget https://github.com/wagoodman/dive/releases/download/v${{ env.DIVE_VERSION }}/dive_${{ env.DIVE_VERSION }}_linux_amd64.tar.gz
+          tar -xzf dive_${{ env.DIVE_VERSION }}_linux_amd64.tar.gz
+          sudo mv dive /usr/local/bin/
+      
+      - name: Analyze image layers
+        run: |
+          CI=true dive ${{ env.IMAGE_NAME }} \
+            --ci \
+            --lowestEfficiency=0.85 \
+            --highestWastedBytes=50MB \
+            > dive-report.txt || true
+          cat dive-report.txt
+      
+      - name: Generate optimization recommendations
+        run: |
+          cat > optimization-report.md << 'EOF'
+          # 🎯 Image Optimization Report
+          
+          **Date**: $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Image**: ${{ env.IMAGE_NAME }}
+          
+          ## Dive Analysis
+          
+          ```
+          $(cat dive-report.txt)
+          ```
+          
+          ## Recommendations
+          
+          - [ ] Review layers with low efficiency (<85%)
+          - [ ] Identify unused files in image
+          - [ ] Consider multi-stage build optimizations
+          - [ ] Minimize number of RUN commands
+          
+          EOF
+      
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimization-report-${{ github.run_id }}
+          path: |
+            dive-report.txt
+            optimization-report.md
+          retention-days: 90
+      
+      - name: Create issue if inefficient
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('optimization-report.md', 'utf8');
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🎯 Image Optimization Needed',
+              body: report,
+              labels: ['optimization', 'docker']
+            });
