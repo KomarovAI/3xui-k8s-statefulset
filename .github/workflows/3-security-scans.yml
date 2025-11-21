@@ -1,0 +1,257 @@
+name: "🔒 Security Scanning Suite"
+
+on:
+  workflow_run:
+    workflows: ["⚡ Critical Path: Build & Runtime Tests"]
+    types: [completed]
+    branches: [main]
+
+env:
+  IMAGE_NAME: test-image:local
+  TRIVY_VERSION: 0.50.2
+  GRYPE_VERSION: 0.75.0
+  DOCKLE_VERSION: 0.4.15
+  SYFT_VERSION: 1.4.0
+
+jobs:
+  # ============================================
+  # DOWNLOAD IMAGE (1 раз для всех!)
+  # ============================================
+  download-image:
+    name: 'Download Built Image'
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ github.event.workflow_run.head_sha }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Cache image for scans
+        uses: actions/cache@v4
+        with:
+          path: image.tar.gz
+          key: security-scan-image-${{ github.event.workflow_run.head_sha }}
+      
+      - name: Upload for parallel jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-image
+          path: image.tar.gz
+          retention-days: 1
+
+  # ============================================
+  # TRIVY CVE SCAN
+  # ============================================
+  trivy-scan:
+    name: 'Trivy - CVE Scan'
+    needs: download-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download cached image
+        uses: actions/download-artifact@v4
+        with:
+          name: security-scan-image
+      
+      - name: Load image
+        run: gunzip -c image.tar.gz | docker load
+      
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: .trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: trivy-db-
+      
+      - name: Install Trivy
+        run: |
+          wget -qO- https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz | tar xz
+          sudo mv trivy /usr/local/bin/
+      
+      - name: Scan image
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --output trivy-report.json \
+            ${{ env.IMAGE_NAME }}
+          
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format table \
+            ${{ env.IMAGE_NAME }} | tee trivy-output.txt
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ github.event.workflow_run.head_sha }}
+          path: trivy-*.*
+          retention-days: 30
+
+  # ============================================
+  # GRYPE VULNERABILITY SCAN
+  # ============================================
+  grype-scan:
+    name: 'Grype - Vulnerability Scan'
+    needs: download-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download cached image
+        uses: actions/download-artifact@v4
+        with:
+          name: security-scan-image
+      
+      - name: Load image
+        run: gunzip -c image.tar.gz | docker load
+      
+      - name: Install Grype
+        run: |
+          wget -O- https://github.com/anchore/grype/releases/download/v${{ env.GRYPE_VERSION }}/grype_${{ env.GRYPE_VERSION }}_linux_amd64.tar.gz | tar xz
+          sudo mv grype /usr/local/bin/
+      
+      - name: Scan image
+        run: |
+          grype ${{ env.IMAGE_NAME }} \
+            --output json \
+            --file grype-report.json || true
+          
+          grype ${{ env.IMAGE_NAME }} \
+            --output table | tee grype-output.txt || true
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-results-${{ github.event.workflow_run.head_sha }}
+          path: grype-*.*
+          retention-days: 30
+
+  # ============================================
+  # DOCKLE HARDENING CHECK
+  # ============================================
+  dockle-scan:
+    name: 'Dockle - Docker Hardening'
+    needs: download-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download cached image
+        uses: actions/download-artifact@v4
+        with:
+          name: security-scan-image
+      
+      - name: Load image
+        run: gunzip -c image.tar.gz | docker load
+      
+      - name: Install Dockle
+        run: |
+          wget -O- https://github.com/goodwithtech/dockle/releases/download/v${{ env.DOCKLE_VERSION }}/dockle_${{ env.DOCKLE_VERSION }}_Linux-64bit.tar.gz | tar xz
+          sudo mv dockle /usr/local/bin/
+      
+      - name: Scan image
+        run: |
+          dockle --format json --output dockle-report.json ${{ env.IMAGE_NAME }} || true
+          dockle ${{ env.IMAGE_NAME }} | tee dockle-output.txt || true
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockle-results-${{ github.event.workflow_run.head_sha }}
+          path: dockle-*.*
+          retention-days: 30
+
+  # ============================================
+  # SYFT SBOM GENERATION
+  # ============================================
+  syft-sbom:
+    name: 'Syft - SBOM Generation'
+    needs: download-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download cached image
+        uses: actions/download-artifact@v4
+        with:
+          name: security-scan-image
+      
+      - name: Load image
+        run: gunzip -c image.tar.gz | docker load
+      
+      - name: Install Syft
+        run: |
+          wget -O- https://github.com/anchore/syft/releases/download/v${{ env.SYFT_VERSION }}/syft_${{ env.SYFT_VERSION }}_linux_amd64.tar.gz | tar xz
+          sudo mv syft /usr/local/bin/
+      
+      - name: Generate SBOM
+        run: |
+          syft ${{ env.IMAGE_NAME }} -o spdx-json > sbom.spdx.json || true
+          syft ${{ env.IMAGE_NAME }} -o table | tee sbom-output.txt || true
+      
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.event.workflow_run.head_sha }}
+          path: sbom*.*
+          retention-days: 90
+
+  # ============================================
+  # SECURITY SUMMARY
+  # ============================================
+  security-summary:
+    name: '🔒 Security Summary'
+    needs: [trivy-scan, grype-scan, dockle-scan, syft-sbom]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+      
+      - name: Generate security report
+        run: |
+          echo "# 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: ${{ github.event.workflow_run.head_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for job in trivy grype dockle syft; do
+            status="${{ needs[job].result }}"
+            if [ "$status" = "success" ]; then
+              echo "| $job | ✅ COMPLETED |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $job | ⚠️  ISSUES FOUND |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📄 **Detailed reports available in artifacts**" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse Trivy report
+          if [ -f "trivy-results-${{ github.event.workflow_run.head_sha }}/trivy-report.json" ]; then
+            CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results-*/trivy-report.json)
+            HIGH=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results-*/trivy-report.json)
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔍 Trivy Findings" >> $GITHUB_STEP_SUMMARY
+            echo "- **CRITICAL**: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "- **HIGH**: $HIGH" >> $GITHUB_STEP_SUMMARY
+          fi
