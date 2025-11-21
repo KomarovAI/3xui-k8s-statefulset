@@ -1,4 +1,4 @@
-name: 🚀 Build, Validate & Push
+name: 🚀 Build, Validate & Push (Optimized)
 
 on:
   workflow_dispatch:
@@ -26,25 +26,45 @@ env:
   IMAGE_NAME: artur7892988/3xui-k8s-statefulset
 
 jobs:
-  # Этап 1: Линтинг Dockerfile
-  lint:
+  # ========================================
+  # STAGE 1: PARALLEL STATIC ANALYSIS
+  # ========================================
+  
+  lint-dockerfile:
     name: 🔍 Lint Dockerfile
     runs-on: ubuntu-latest
     steps:
       - name: 📁 Checkout
         uses: actions/checkout@v4
 
-      - name: 🕵️‍♂️ Hadolint - Dockerfile linter
+      - name: 🕵️‍♂️ Hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
           failure-threshold: warning
 
-  # Этап 2: Тестовая сборка и валидация
-  build-and-test:
-    name: 🛠️ Build & Test
+  lint-scripts:
+    name: 🔍 Lint Shell Scripts
     runs-on: ubuntu-latest
-    needs: lint
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🕵️‍♂️ ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find scripts/ -name '*.sh' -exec shellcheck {} +
+
+  # ========================================
+  # STAGE 2: BUILD (SHARED ARTIFACT)
+  # ========================================
+  
+  build:
+    name: 🛠️ Build Image
+    runs-on: ubuntu-latest
+    needs: [lint-dockerfile, lint-scripts]
+    outputs:
+      image-name: ${{ env.IMAGE_NAME }}
     steps:
       - name: 📁 Checkout
         uses: actions/checkout@v4
@@ -52,21 +72,47 @@ jobs:
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🛠️ Build test image
+      - name: 🛠️ Build and export
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          push: false
-          load: true
           tags: ${{ env.IMAGE_NAME }}:test
+          outputs: type=docker,dest=/tmp/image.tar
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: ⚙️ Test container startup
+      - name: 📦 Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+  # ========================================
+  # STAGE 3: PARALLEL TESTING (7 RUNNERS)
+  # ========================================
+  
+  test-startup:
+    name: ⚙️ Test Startup
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: 🚀 Test container startup
         run: |
-          echo "🚀 Testing container startup..."
           docker run -d --name test-container \
             -e XUI_ENABLE_FAIL2BAN=false \
             ${{ env.IMAGE_NAME }}:test
@@ -85,99 +131,200 @@ jobs:
           docker stop test-container
           docker rm test-container
 
-      - name: 🧪 Install goss and dgoss
+  test-structure:
+    name: 🔍 Structure Test
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: 💻 Install container-structure-test
         run: |
-          # Install goss
+          curl -LO https://storage.googleapis.com/container-structure-test/latest/container-structure-test-linux-amd64
+          chmod +x container-structure-test-linux-amd64
+          sudo mv container-structure-test-linux-amd64 /usr/local/bin/container-structure-test
+
+      - name: 🧪 Run structure tests
+        run: |
+          container-structure-test test \
+            --image ${{ env.IMAGE_NAME }}:test \
+            --config structure-test.yaml
+
+  test-runtime-dgoss:
+    name: 🧪 Runtime Test (dgoss)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: 💻 Install goss/dgoss
+        run: |
           curl -fsSL https://goss.rocks/install | sh
           sudo mv /usr/local/bin/goss /usr/bin/goss
-          
-          # Install dgoss
           curl -fsSL -o dgoss https://raw.githubusercontent.com/aelsabbahy/goss/master/extras/dgoss/dgoss
-          chmod +x dgoss
-          sudo mv dgoss /usr/bin/dgoss
-          
-          goss --version
-          echo "✅ goss and dgoss installed"
+          chmod +x dgoss && sudo mv dgoss /usr/bin/dgoss
 
-      - name: 🧪 dgoss runtime tests (emulate K8s PVC)
+      - name: 🧪 Run dgoss tests (PVC emulation)
         run: |
-          echo "🧪 Running dgoss with PVC emulation..."
-          
-          # Создаём volume как PVC mount
           docker volume create 3xui-pvc-test
-          
-          # dgoss с volume монтированием (как StatefulSet)
           GOSS_FILES_STRATEGY=cp GOSS_SLEEP=10 \
           dgoss run \
             -v 3xui-pvc-test:/etc/x-ui:rw \
             -e XUI_ENABLE_FAIL2BAN=false \
             ${{ env.IMAGE_NAME }}:test
-          
-          echo "✅ dgoss tests passed!"
-          
-          # Проверка персистентности
-          echo "🔍 Checking PVC persistence..."
-          docker run --rm -v 3xui-pvc-test:/data alpine ls -la /data
-          
-          # Очистка
           docker volume rm 3xui-pvc-test
 
-      - name: 🔍 Inspect image structure
-        run: |
-          echo "## 📦 Image Structure" >> $GITHUB_STEP_SUMMARY
-          docker run --rm ${{ env.IMAGE_NAME }}:test ls -la /app/bin/ >> $GITHUB_STEP_SUMMARY || echo "bin/ not found" >> $GITHUB_STEP_SUMMARY
-          docker run --rm ${{ env.IMAGE_NAME }}:test cat /app/bin/config.json >> $GITHUB_STEP_SUMMARY || echo "config.json missing" >> $GITHUB_STEP_SUMMARY
-
-  # Этап 3: Сканирование безопасности
-  security-scan:
-    name: 🔒 Security Scan
+  test-healthcheck:
+    name: 💚 Healthcheck Test
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs: build
     steps:
       - name: 📁 Checkout
         uses: actions/checkout@v4
 
-      - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🛠️ Build image for scanning
-        uses: docker/build-push-action@v5
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
         with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: ${{ env.IMAGE_NAME }}:scan
-          cache-from: type=gha
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: 💚 Test healthcheck endpoint
+        run: |
+          docker run -d --name healthcheck-test \
+            -e XUI_ENABLE_FAIL2BAN=false \
+            ${{ env.IMAGE_NAME }}:test
+          
+          echo "Waiting for startup..."
+          sleep 15
+          
+          # Test healthcheck
+          docker exec healthcheck-test curl -f http://localhost:2053/ -m 5
+          
+          echo "✅ Healthcheck passed"
+          docker stop healthcheck-test
+          docker rm healthcheck-test
+
+  # ========================================
+  # STAGE 4: PARALLEL SECURITY SCANS (3 RUNNERS)
+  # ========================================
+  
+  scan-trivy:
+    name: 🔒 Trivy Scan
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
 
       - name: 🔒 Trivy vulnerability scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:scan
+          image-ref: ${{ env.IMAGE_NAME }}:test
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'  # Блокируем при критичных CVE
+          exit-code: '1'
 
-      - name: 🔒 Dockle - Docker best practices
+  scan-dockle:
+    name: 🔒 Dockle Scan
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: 🔒 Dockle best practices
         uses: erzz/dockle-action@v1
         with:
-          image: ${{ env.IMAGE_NAME }}:scan
+          image: ${{ env.IMAGE_NAME }}:test
           exit-code: '0'
           exit-level: warn
 
-  # Этап 4: Пуш в Docker Hub (только после всех проверок!)
+  analyze-dive:
+    name: 🔬 Dive Analysis
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 📁 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: 🐳 Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: 💻 Install dive
+        run: |
+          curl -sL https://github.com/wagoodman/dive/releases/download/v0.11.0/dive_0.11.0_linux_amd64.tar.gz | tar xz
+          sudo mv dive /usr/local/bin/dive
+
+      - name: 🔬 Dive layer analysis
+        run: |
+          dive ${{ env.IMAGE_NAME }}:test --ci
+
+  # ========================================
+  # STAGE 5: PUSH (AFTER ALL TESTS PASS)
+  # ========================================
+  
   push:
     name: 📤 Push to Docker Hub
     runs-on: ubuntu-latest
-    needs: [lint, build-and-test, security-scan]
+    needs: 
+      - test-startup
+      - test-structure
+      - test-runtime-dgoss
+      - test-healthcheck
+      - scan-trivy
+      - scan-dockle
+      - analyze-dive
     if: github.event_name != 'pull_request'
     permissions:
       contents: write
       security-events: write
-    outputs:
-      image-tag: ${{ steps.meta.outputs.version }}
-      image-digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: 📁 Checkout
         uses: actions/checkout@v4
@@ -222,7 +369,7 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-      - name: 📊 Image analysis
+      - name: 📊 Image metrics
         run: |
           docker pull ${{ env.IMAGE_NAME }}:latest
           SIZE=$(docker inspect ${{ env.IMAGE_NAME }}:latest --format='{{.Size}}' | numfmt --to=iec-i --suffix=B)
@@ -236,10 +383,8 @@ jobs:
           echo "| **Layers** | $LAYERS |" >> $GITHUB_STEP_SUMMARY
           echo "| **Tags** | ${{ steps.meta.outputs.tags }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Digest** | ${{ steps.build.outputs.digest }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **All validation checks passed!**" >> $GITHUB_STEP_SUMMARY
 
-      - name: 🔒 Final security report
+      - name: 🔒 Final security report (SARIF)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE_NAME }}:latest
