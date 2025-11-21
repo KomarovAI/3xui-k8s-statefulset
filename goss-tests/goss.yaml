@@ -70,7 +70,7 @@ command:
   bash --version:
     exit-status: 0
     stdout:
-    - GNU bash, version 5.2.37
+    - GNU bash, version 5.2.26
   
   id -u:
     exit-status: 0
