@@ -85,6 +85,43 @@ jobs:
           docker stop test-container
           docker rm test-container
 
+      - name: 🧪 Install goss and dgoss
+        run: |
+          # Install goss
+          curl -fsSL https://goss.rocks/install | sh
+          sudo mv /usr/local/bin/goss /usr/bin/goss
+          
+          # Install dgoss
+          curl -fsSL -o dgoss https://raw.githubusercontent.com/aelsabbahy/goss/master/extras/dgoss/dgoss
+          chmod +x dgoss
+          sudo mv dgoss /usr/bin/dgoss
+          
+          goss --version
+          echo "✅ goss and dgoss installed"
+
+      - name: 🧪 dgoss runtime tests (emulate K8s PVC)
+        run: |
+          echo "🧪 Running dgoss with PVC emulation..."
+          
+          # Создаём volume как PVC mount
+          docker volume create 3xui-pvc-test
+          
+          # dgoss с volume монтированием (как StatefulSet)
+          GOSS_FILES_STRATEGY=cp GOSS_SLEEP=10 \
+          dgoss run \
+            -v 3xui-pvc-test:/etc/x-ui:rw \
+            -e XUI_ENABLE_FAIL2BAN=false \
+            ${{ env.IMAGE_NAME }}:test
+          
+          echo "✅ dgoss tests passed!"
+          
+          # Проверка персистентности
+          echo "🔍 Checking PVC persistence..."
+          docker run --rm -v 3xui-pvc-test:/data alpine ls -la /data
+          
+          # Очистка
+          docker volume rm 3xui-pvc-test
+
       - name: 🔍 Inspect image structure
         run: |
           echo "## 📦 Image Structure" >> $GITHUB_STEP_SUMMARY
