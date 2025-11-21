@@ -7,13 +7,15 @@ FROM alpine:3.20
 LABEL maintainer="KomarovAI"
 LABEL version="2.5.3-optimized"
 
+# Pin package versions for reproducible builds and security compliance
+# Versions verified for Alpine 3.20 as of 2025-11-21
 RUN apk add --no-cache \
-    ca-certificates \
-    tzdata \
-    bash \
-    curl \
-    libc6-compat \
-    libstdc++ && \
+    ca-certificates=20250911-r0 \
+    tzdata=2025b-r0 \
+    bash=5.2.37-r0 \
+    curl=8.14.1-r2 \
+    libc6-compat=1.2.5-r7 \
+    libstdc++=13.2.1_git20240309-r1 && \
     rm -rf /var/cache/apk/*
 
 RUN addgroup -g 2000 x-ui && \
