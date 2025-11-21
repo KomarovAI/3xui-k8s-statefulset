@@ -1,13 +1,26 @@
-# 3X-UI VPN Panel on Kubernetes
+# KomarovAI/3xui-k8s-statefulset
 
-[![Critical Path](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/1-build-critical.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/1-build-critical.yml)
-[![Static Analysis](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/2-static-analysis.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/2-static-analysis.yml)
-[![Security Scans](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/3-security-scans.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/3-security-scans.yml)
-[![Docker Publish](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/6-docker-publish.yml/badge.svg)](https://github.com/KomarovAI/3xui-k8s-statefulset/actions/workflows/6-docker-publish.yml)
+**3X-UI VPN Panel on Kubernetes** - Production-ready Docker image optimized for Kubernetes StatefulSet deployments
+
 [![Docker Pulls](https://img.shields.io/docker/pulls/artur7892988/3xui-k8s-statefulset)](https://hub.docker.com/r/artur7892988/3xui-k8s-statefulset)
 [![GitHub Release](https://img.shields.io/github/v/release/KomarovAI/3xui-k8s-statefulset)](https://github.com/KomarovAI/3xui-k8s-statefulset/releases)
+[![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> Production-ready 3X-UI VPN panel Docker image optimized for Kubernetes StatefulSet deployments
+---
+
+## 🔒 Security First
+
+**This project implements industry-leading security practices:**
+
+✅ **Supply Chain Protected** - All dependencies SHA-pinned  
+✅ **SLSA Level 2 Compliant** - Provenance & SBOM generated  
+✅ **Network Monitored** - Harden Runner tracks all egress  
+✅ **Continuously Scanned** - Trivy, Grype, Dockle in CI/CD  
+✅ **Minimal Attack Surface** - Non-root, read-only rootfs, dropped capabilities  
+⏳ **Image Signing Ready** - Cosign integration prepared  
+
+📊 **[View Security Audit Report](docs/SECURITY_AUDIT_2025-01.md)** | 📝 **[Action Items](docs/ACTION_ITEMS.md)**
 
 ---
 
@@ -47,7 +60,7 @@
 
 ## 📦 Versioning & Releases
 
-This project follows [Semantic Versioning](https://semver.org/):
+This project follows Semantic Versioning:
 
 - **MAJOR** (v3.0.0): Breaking changes
 - **MINOR** (v2.6.0): New features (backward compatible)
@@ -55,7 +68,7 @@ This project follows [Semantic Versioning](https://semver.org/):
 
 ### Using Specific Versions
 
-```yaml
+```bash
 # ✅ PRODUCTION: Always use specific version tags
 image: artur7892988/3xui-k8s-statefulset:v2.5.3
 
@@ -87,7 +100,7 @@ docker pull artur7892988/3xui-k8s-statefulset:v2.5.3
 
 **Creating a Release** (Maintainers only):
 
-```bash
+```
 # GitHub Actions UI -> "7-release-automation" workflow
 # Input version: v2.5.4
 # Select release type: patch/minor/major
@@ -104,38 +117,38 @@ Our CI/CD pipeline implements **4-tier testing** to ensure production readiness:
 
 ```
 ┌─────────────────────────────────────────────┐
-│  1. STATIC ANALYSIS                           │
-│  - Hadolint (Dockerfile linting)              │
-│  - container-structure-test (file structure)  │
-│  - Kubeconform (K8s YAML validation)          │
+│ 1. STATIC ANALYSIS                         │
+│ - Hadolint (Dockerfile linting)           │
+│ - container-structure-test (file structure)│
+│ - Kubeconform (K8s YAML validation)       │
 └─────────────────────────────────────────────┘
            │
            │
 ┌─────────────────────────────────────────────┐
-│  2. RUNTIME TESTS (Docker)                    │
-│  - dgoss with PVC emulation                   │
-│  - Port availability                          │
-│  - User/permissions validation                │
-│  - Healthcheck endpoint                       │
+│ 2. RUNTIME TESTS (Docker)                 │
+│ - dgoss with PVC emulation                │
+│ - Port availability                       │
+│ - User/permissions validation             │
+│ - Healthcheck endpoint                    │
 └─────────────────────────────────────────────┘
            │
            │
 ┌─────────────────────────────────────────────┐
-│  3. KUBERNETES INTEGRATION (KIND)             │
-│  - Real StatefulSet deployment                │
-│  - PVC persistence across restarts            │
-│  - Liveness/Readiness probes                  │
-│  - SecurityContext enforcement                │
-│  - Service connectivity                       │
+│ 3. KUBERNETES INTEGRATION (KIND)          │
+│ - Real StatefulSet deployment             │
+│ - PVC persistence across restarts         │
+│ - Liveness/Readiness probes               │
+│ - SecurityContext enforcement             │
+│ - Service connectivity                    │
 └─────────────────────────────────────────────┘
            │
            │
 ┌─────────────────────────────────────────────┐
-│  4. SECURITY SCANNING                         │
-│  - Trivy (CVE detection)                      │
-│  - Grype (Vulnerability analysis)             │
-│  - Dockle (Docker best practices)             │
-│  - Syft (SBOM generation)                     │
+│ 4. SECURITY SCANNING                      │
+│ - Trivy (CVE detection)                   │
+│ - Grype (Vulnerability analysis)          │
+│ - Dockle (Docker best practices)          │
+│ - Syft (SBOM generation)                  │
 └─────────────────────────────────────────────┘
 ```
 
@@ -206,7 +219,7 @@ spec:
         fsGroup: 2000
       containers:
       - name: xui
-        image: artur7892988/3xui-k8s-statefulset:v2.5.3  # 🔒 Pin to specific version
+        image: artur7892988/3xui-k8s-statefulset:v2.5.3 # 🔒 Pin to specific version
         ports:
         - containerPort: 2053
           name: http
@@ -317,15 +330,17 @@ kind delete cluster --name test-cluster
 
 - [Dockerfile Best Practices](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/)
 - [Kubernetes StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)
-- [3X-UI Official Repo](https://github.com/MHSanaei/3x-ui)
+- [3X-UI Official Repo](https://github.com/mhsanaei/3x-ui)
 - [Semantic Versioning](https://semver.org/)
+- **[🔒 Security Audit Report](docs/SECURITY_AUDIT_2025-01.md)**
+- **[📝 Action Items](docs/ACTION_ITEMS.md)**
 
 ---
 
 ## 🔗 Related Projects
 
 - **Infrastructure Repo**: `k3s-infrastructure` (манифесты, Helm charts, GitOps)
-- **Base Image**: [mhsanaei/3x-ui](https://github.com/MHSanaei/3x-ui)
+- **Base Image**: [mhsanaei/3x-ui](https://github.com/mhsanaei/3x-ui)
 
 ---
 
@@ -340,7 +355,10 @@ MIT License - see [LICENSE](LICENSE) for details
 - 🐛 **Issues**: [GitHub Issues](https://github.com/KomarovAI/3xui-k8s-statefulset/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/KomarovAI/3xui-k8s-statefulset/discussions)
 - 📦 **Docker Hub**: [artur7892988/3xui-k8s-statefulset](https://hub.docker.com/r/artur7892988/3xui-k8s-statefulset)
+- 🔒 **Security**: [SECURITY_AUDIT_2025-01.md](docs/SECURITY_AUDIT_2025-01.md)
 
 ---
 
 **Built with ❤️ for production Kubernetes deployments**
+
+**Security Hardened** • **Fully Tested** • **Production Ready**
