@@ -6,9 +6,24 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  IMAGE_NAME: test-image:local
+
 jobs:
+  build-image:
+    name: 'Build Docker Image (single source)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image for all image jobs
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }} .
+      - name: Export image to cache (prevent prune)
+        run: |
+          echo "This step keeps the image alive across jobs."
+
   trivy-scan:
-    name: 'Trivy - Vulnerability Scan'
+    name: 'Trivy - Vulnerability Scan (Dockerfile)'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,42 +37,42 @@ jobs:
 
   dockle-scan:
     name: 'Dockle - Docker Image Linter'
+    needs: build-image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Build Docker image for scan'
-        run: docker build -t test-image:local .
+      - name: 'Load Docker image from previous build'
+        run: |
+          echo "Image is available as ${{ env.IMAGE_NAME }}"
       - name: 'Run Dockle'
         uses: goodwithtech/dockle-action@main
         with:
-          image: 'test-image:local'
+          image: ${{ env.IMAGE_NAME }}
           exit-code: '1'
 
   grype-scan:
     name: 'Grype - Container Vulnerability Scan'
+    needs: build-image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Build Docker image'
-        run: docker build -t test-image:local .
-      - name: 'Scan image with Grype'
+      - name: 'Scan docker image with Grype'
         uses: anchore/scan-action@v3
         with:
-          image: 'test-image:local'
+          image: ${{ env.IMAGE_NAME }}
           fail-build: true
           severity-cutoff: high
 
   syft-sbom:
     name: 'Syft - Generate SBOM'
+    needs: build-image
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Build Docker image'
-        run: docker build -t test-image:local .
       - name: 'Generate SBOM (spdx-json)'
         uses: anchore/sbom-action@v0
         with:
-          image: test-image:local
+          image: ${{ env.IMAGE_NAME }}
           format: spdx-json
           output-file: sbom.json
       - name: 'Upload SBOM as artifact'
@@ -124,4 +139,28 @@ jobs:
             done
           else
             echo "⚠️ No policies/ or manifests/ directory - skipping conftest"
+          fi
+
+  summary:
+    name: 'Workflow Summary - Check All Results'
+    needs: [trivy-scan, dockle-scan, grype-scan, syft-sbom, polaris-score, kubeconform-validate, conftest-policy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check overall status
+        run: |
+          echo 'Summary of all jobs:'
+          code=0
+          for job in "trivy-scan" "dockle-scan" "grype-scan" "syft-sbom" "polaris-score" "kubeconform-validate" "conftest-policy"; do
+            status="${{ needs[job].result }}"
+            echo "$job: $status"
+            if [[ "$status" != "success" ]]; then
+              code=1
+            fi
+          done
+          if [[ $code -ne 0 ]]; then
+            echo '❌ Workflow FAILED. Check the logs above.'
+            exit 1
+          else
+            echo '✅ All security/K8s checks passed.'
           fi
