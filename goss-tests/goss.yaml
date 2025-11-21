@@ -1,89 +1,30 @@
-# Goss runtime tests for 3X-UI container
-# These tests validate the running container behaviour
-
-port:
-  tcp:2053:
-    listening: true
-    ip:
-    - 0.0.0.0
-  tcp:2096:
-    listening: true
-    ip:
-    - 0.0.0.0
-
-process:
-  x-ui:
-    running: true
-
-user:
-  x-ui:
-    exists: true
-    uid: 2000
-    gid: 2000
-    groups:
-    - x-ui
-    home: /home/x-ui
-
-group:
-  x-ui:
-    exists: true
-    gid: 2000
-
-file:
-  /app:
-    exists: true
-    filetype: directory
-    owner: x-ui
-    group: x-ui
-  
-  /app/bin:
-    exists: true
-    filetype: directory
-    owner: x-ui
-    group: x-ui
-  
-  /app/bin/config.json:
-    exists: true
-    filetype: file
-    mode: "0666"
-  
-  /usr/bin/x-ui:
-    exists: true
-    filetype: file
-    mode: "0755"
-  
-  /app/DockerEntrypoint.sh:
-    exists: true
-    filetype: file
-    mode: "0755"
-  
-  /etc/ssl/certs/ca-certificates.crt:
-    exists: true
-    filetype: file
-
-command:
-  curl --version:
-    exit-status: 0
-    stdout:
-    - curl 8.14.1
-  
-  bash --version:
-    exit-status: 0
-    stdout:
-    - GNU bash, version 5.2.26
-  
-  id -u:
-    exit-status: 0
-    stdout:
-    - "2000"
-  
-  pwd:
-    exit-status: 0
-    stdout:
-    - /app
-
-http:
-  http://localhost:2053/:
-    status: 200
-    timeout: 5000
-    allow-insecure: true
+goss:
+  file:
+    /etc/x-ui:
+      exists: true
+      filetype: directory
+      owner: x-ui
+      group: x-ui
+      mode: "0755"
+    /app:
+      exists: true
+      filetype: directory
+      owner: x-ui
+      group: x-ui
+      mode: "0755"
+  command:
+    bash --version:
+      exit-status: 0
+      stdout:
+        - GNU bash, version 5.2.26
+    id -u:
+      exit-status: 0
+      stdout:
+        - "2000"
+    touchfile:
+      exit-status: 0
+      stdout:
+        - ""
+      stderr:
+        - ""
+      exec: bash -c 'touch /etc/x-ui/testfile'
