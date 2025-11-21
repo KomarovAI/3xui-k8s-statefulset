@@ -1,0 +1,129 @@
+name: "📋 Unified CI/CD Report"
+
+on:
+  workflow_run:
+    workflows: 
+      - "⚡ Critical Path: Build & Runtime Tests"
+      - "📊 Static Analysis & Best Practices"
+      - "🔒 Security Scanning Suite"
+    types: [completed]
+    branches: [main]
+
+jobs:
+  generate-unified-report:
+    name: 'Generate Unified Report'
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+      
+      - name: Generate unified report
+        run: |
+          cat > UNIFIED_REPORT.md << 'EOF'
+          # 📊 CI/CD Pipeline Unified Report
+          
+          **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Workflow Run**: ${{ github.event.workflow_run.id }}
+          **Commit**: ${{ github.event.workflow_run.head_sha }}
+          **Branch**: ${{ github.event.workflow_run.head_branch }}
+          **Actor**: ${{ github.event.workflow_run.actor.login }}
+          
+          ---
+          
+          ## 🚨 Critical Path Status
+          
+          EOF
+          
+          # Aggregate critical results
+          if [ -f "smoke-test-logs-*/smoke-test.log" ]; then
+            echo "### 🔥 Smoke Tests" >> UNIFIED_REPORT.md
+            echo '```
+            tail -n 50 smoke-test-logs-*/smoke-test.log >> UNIFIED_REPORT.md
+            echo '```' >> UNIFIED_REPORT.md
+          fi
+          
+          if [ -f "health-probe-logs-*/health-probe.log" ]; then
+            echo "### 🩺 Health Probes" >> UNIFIED_REPORT.md
+            echo '```
+            tail -n 50 health-probe-logs-*/health-probe.log >> UNIFIED_REPORT.md
+            echo '```' >> UNIFIED_REPORT.md
+          fi
+          
+          echo "" >> UNIFIED_REPORT.md
+          echo "---" >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          echo "## 📊 Static Analysis" >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          
+          # Aggregate static analysis
+          for tool in hadolint kubescore kubeconform polaris conftest; do
+            if [ -f "${tool}-results-*/${tool}-output.txt" ]; then
+              echo "### $tool" >> UNIFIED_REPORT.md
+              echo '```
+              cat ${tool}-results-*/${tool}-output.txt >> UNIFIED_REPORT.md
+              echo '```' >> UNIFIED_REPORT.md
+              echo "" >> UNIFIED_REPORT.md
+            fi
+          done
+          
+          echo "---" >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          echo "## 🔒 Security Findings" >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          
+          # Aggregate security results
+          if [ -f "trivy-results-*/trivy-report.json" ]; then
+            echo "### Trivy CVE Summary" >> UNIFIED_REPORT.md
+            CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results-*/trivy-report.json)
+            HIGH=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results-*/trivy-report.json)
+            echo "- **CRITICAL**: $CRITICAL" >> UNIFIED_REPORT.md
+            echo "- **HIGH**: $HIGH" >> UNIFIED_REPORT.md
+            echo "" >> UNIFIED_REPORT.md
+          fi
+          
+          echo "---" >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          echo "## 📄 Artifacts" >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          echo "All detailed reports available in workflow artifacts." >> UNIFIED_REPORT.md
+          echo "" >> UNIFIED_REPORT.md
+          echo "🔗 [View Full Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }})" >> UNIFIED_REPORT.md
+      
+      - name: Upload unified report
+        uses: actions/upload-artifact@v4
+        with:
+          name: UNIFIED_REPORT-${{ github.event.workflow_run.head_sha }}
+          path: UNIFIED_REPORT.md
+          retention-days: 90
+      
+      - name: Comment on PR (if applicable)
+        if: github.event.workflow_run.event == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('UNIFIED_REPORT.md', 'utf8');
+            
+            // Find PR number from workflow_run
+            const pulls = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${{ github.event.workflow_run.head_branch }}`
+            });
+            
+            if (pulls.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pulls.data[0].number,
+                body: `## 📊 CI/CD Pipeline Report\n\n${report}`
+              });
+            }
