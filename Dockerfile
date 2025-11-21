@@ -24,10 +24,9 @@ RUN addgroup -g 2000 x-ui && \
 RUN mkdir -p /app /app/bin && \
     chown -R x-ui:x-ui /app
 
-# Копируем из builder и обязательно кладём bin/ внутри образа
+# Копируем из builder
 COPY --from=builder --chown=x-ui:x-ui /app/ /app/
 COPY --from=builder --chown=x-ui:x-ui /usr/bin/x-ui /usr/bin/x-ui
-COPY --from=builder --chown=x-ui:x-ui /usr/local/x-ui/bin/ /app/bin/
 
 # Здесь создаём минимальный config.json, если его не было
 RUN test -f /app/bin/config.json || echo '{"log":{"level":"info"},"inbounds":[],"outbounds":[]}' > /app/bin/config.json
