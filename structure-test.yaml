@@ -1,0 +1,28 @@
+schemaVersion: '2.0.0'
+
+fileExistenceTests:
+  - name: 'x-ui server binary'
+    path: '/app/x-ui'
+    shouldExist: true
+    permissions: '0755'
+
+  - name: 'bin/xray-linux-amd64 binary'
+    path: '/app/bin/xray-linux-amd64'
+    shouldExist: true
+    permissions: '0755'
+
+  - name: 'config.json initial'
+    path: '/app/bin/config.json'
+    shouldExist: true
+
+commandTests:
+  - name: 'x-ui --version'
+    command: ['/app/x-ui', '--version']
+    expectedOutput: ['x-ui']
+    exitCode: 0
+
+metadataTest:
+  env:
+    - key: 'XUI_ENABLE_FAIL2BAN'
+  exposedPorts: ['2053', '2096']
+  user: 'x-ui'
