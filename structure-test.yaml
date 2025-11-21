@@ -1,5 +1,4 @@
 schemaVersion: '2.0.0'
-
 fileExistenceTests:
   - name: 'App directory exists'
     path: '/app'
@@ -11,7 +10,6 @@ fileExistenceTests:
   - name: 'Persistent volume directory exists'
     path: '/etc/x-ui'
     shouldExist: true
-
 commandTests:
   - name: 'User x-ui exists'
     command: 'id'
@@ -19,17 +17,16 @@ commandTests:
     expectedOutput: ['2000']
   - name: 'App directory is writable'
     command: 'bash'
-    args: ['-c', 'touch /etc/x-ui/testfile && echo $?' ]
+    args: ['-c', 'touch /etc/x-ui/testfile; echo $?']
     expectedOutput: ['0']
   - name: 'Entrypoint is executable'
     command: 'bash'
-    args: ['-c', 'test -x /app/DockerEntrypoint.sh && echo OK' ]
+    args: ['-c', 'test -x /app/DockerEntrypoint.sh && echo OK']
     expectedOutput: ['OK']
   - name: 'Bash version'
     command: 'bash'
     args: ['--version']
     expectedOutput: ['GNU bash, version 5.2.26']
-
 metadataTest:
   user: 'x-ui'
   exposedPorts: ['2053', '2096']
