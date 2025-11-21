@@ -1,0 +1,22 @@
+file:
+  /app/x-ui:
+    exists: true
+    mode: "0755"
+
+  /app/bin/config.json:
+    exists: true
+    mode: "0666"
+
+  /app/bin/xray-linux-amd64:
+    exists: true
+    mode: "0755"
+
+port:
+  tcp:2053:
+    listening: true
+  tcp:2096:
+    listening: true
+
+process:
+  x-ui:
+    running: true
