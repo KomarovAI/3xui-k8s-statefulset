@@ -21,14 +21,25 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   validate-version:
     name: 'Validate Version'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.validate.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Harden Runner
+        uses: step-security/harden-runner@0080882f6c36860b6ba35c610c98ce87d4e2f26f # v2.10.2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
       
@@ -59,7 +70,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - name: Harden Runner
+        uses: step-security/harden-runner@0080882f6c36860b6ba35c610c98ce87d4e2f26f # v2.10.2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
       
@@ -92,6 +109,10 @@ jobs:
             
             echo "#### 🐛 Bug Fixes" >> changelog.md
             git log ${PREVIOUS_TAG}..HEAD --pretty=format:"%s (%h)" --no-merges --grep="^fix" | sed 's/^/- /' >> changelog.md || echo "- No bug fixes" >> changelog.md
+            echo "" >> changelog.md
+            
+            echo "#### 🔒 Security" >> changelog.md
+            git log ${PREVIOUS_TAG}..HEAD --pretty=format:"%s (%h)" --no-merges --grep="^security" | sed 's/^/- /' >> changelog.md || echo "- No security updates" >> changelog.md
             echo "" >> changelog.md
             
             echo "#### 🛠️ Improvements" >> changelog.md
