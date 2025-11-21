@@ -1,0 +1,78 @@
+# goss.yaml - Runtime тесты под Kubernetes
+# Эмулирует поведение pod в StatefulSet с PVC
+
+port:
+  tcp:2053:
+    listening: true
+    ip:
+    - '0.0.0.0'
+  tcp:2096:
+    listening: true
+    ip:
+    - '0.0.0.0'
+
+process:
+  x-ui:
+    running: true
+
+user:
+  x-ui:
+    exists: true
+    uid: 2000
+    gid: 2000
+    groups:
+    - x-ui
+    home: /home/x-ui
+
+file:
+  /etc/x-ui:
+    exists: true
+    filetype: directory
+    owner: x-ui
+    group: x-ui
+    mode: "0755"
+  
+  /app/DockerEntrypoint.sh:
+    exists: true
+    mode: "0755"
+    filetype: file
+  
+  /app:
+    exists: true
+    filetype: directory
+
+command:
+  # ✅ Проверка writable PVC (как в StatefulSet)
+  pvc-writable:
+    exec: "touch /etc/x-ui/test-write && rm /etc/x-ui/test-write"
+    exit-status: 0
+  
+  # ✅ Проверка healthcheck endpoint
+  healthcheck:
+    exec: "curl -sf http://localhost:2053/ -m 5 || exit 1"
+    exit-status: 0
+    timeout: 10000  # 10 секунд
+  
+  # ✅ Проверка SQLite доступности
+  sqlite-works:
+    exec: "sqlite3 --version"
+    exit-status: 0
+  
+  # ✅ Проверка прав на PVC mount point
+  pvc-permissions:
+    exec: "stat -c '%U:%G' /etc/x-ui"
+    exit-status: 0
+    stdout:
+    - x-ui:x-ui
+
+package:
+  bash:
+    installed: true
+    versions:
+    - 5.2.26
+  curl:
+    installed: true
+  ca-certificates:
+    installed: true
+  tzdata:
+    installed: true
