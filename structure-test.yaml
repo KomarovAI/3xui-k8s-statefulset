@@ -42,7 +42,7 @@ commandTests:
   - name: 'bash is installed'
     command: 'bash'
     args: ['--version']
-    expectedOutput: ['GNU bash, version 5.2.37']
+    expectedOutput: ['GNU bash, version 5.2.26']
   
   - name: 'x-ui user exists'
     command: 'id'
