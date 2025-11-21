@@ -18,17 +18,35 @@ jobs:
       - name: Build Docker image for all image jobs
         run: |
           docker build -t ${{ env.IMAGE_NAME }} .
+      - name: Save Docker image as artifact
+        run: |
+          docker save ${{ env.IMAGE_NAME }} | gzip > image.tar.gz
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-image
+          path: image.tar.gz
 
   trivy-scan:
     name: 'Trivy - Vulnerability Scan (Dockerfile)'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Trivy
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget
+          wget -qO- https://github.com/aquasecurity/trivy/releases/download/v0.50.2/trivy_0.50.2_Linux-64bit.tar.gz | tar xz
+          sudo mv trivy /usr/local/bin/
       - name: Run Trivy on Dockerfile
         run: |
-          trivy config Dockerfile > trivy.log || true
+          trivy config Dockerfile > trivy.log
           echo '## Trivy Vulnerability Report' >> $GITHUB_STEP_SUMMARY
-          grep -iE 'CRITICAL|HIGH|ERROR|FAIL|DENY' trivy.log >> $GITHUB_STEP_SUMMARY || echo 'Нет уязвимостей' >> $GITHUB_STEP_SUMMARY
+          if grep -qiE 'CRITICAL|HIGH|ERROR|FAIL|DENY' trivy.log; then
+            grep -iE 'CRITICAL|HIGH|ERROR|FAIL|DENY' trivy.log >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo 'Нет уязвимостей' >> $GITHUB_STEP_SUMMARY
+          fi
 
   dockle-scan:
     name: 'Dockle - Docker Image Linter'
@@ -36,11 +54,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Dockle
+        run: |
+          wget -O - https://github.com/goodwithtech/dockle/releases/download/v0.4.15/dockle_0.4.15_Linux-64bit.tar.gz | tar xz
+          sudo mv dockle /usr/local/bin/
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: built-image
+      - name: Load Docker image
+        run: |
+          gunzip -c image.tar.gz | docker load
       - name: Run Dockle
         run: |
-          dockle ${{ env.IMAGE_NAME }} > dockle.log || true
+          dockle ${{ env.IMAGE_NAME }} > dockle.log
           echo '## Dockle Security Output' >> $GITHUB_STEP_SUMMARY
-          grep -iE 'FAIL|WARN|ERROR|DENY' dockle.log >> $GITHUB_STEP_SUMMARY || echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+          if grep -qiE 'FAIL|WARN|ERROR|DENY' dockle.log; then
+            grep -iE 'FAIL|WARN|ERROR|DENY' dockle.log >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+          fi
 
   grype-scan:
     name: 'Grype - Container Vulnerability Scan'
@@ -48,11 +82,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Grype
+        run: |
+          wget -O- https://github.com/anchore/grype/releases/download/v0.75.0/grype_0.75.0_linux_amd64.tar.gz | tar xz
+          sudo mv grype /usr/local/bin/
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: built-image
+      - name: Load Docker image
+        run: |
+          gunzip -c image.tar.gz | docker load
       - name: Run Grype
         run: |
-          grype ${{ env.IMAGE_NAME }} > grype.log || true
+          grype ${{ env.IMAGE_NAME }} > grype.log
           echo '## Grype CVE Report' >> $GITHUB_STEP_SUMMARY
-          grep -iE 'CRITICAL|HIGH|ERROR|FAIL|DENY' grype.log >> $GITHUB_STEP_SUMMARY || echo 'Нет уязвимостей' >> $GITHUB_STEP_SUMMARY
+          if grep -qiE 'CRITICAL|HIGH|ERROR|FAIL|DENY' grype.log; then
+            grep -iE 'CRITICAL|HIGH|ERROR|FAIL|DENY' grype.log >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo 'Нет уязвимостей' >> $GITHUB_STEP_SUMMARY
+          fi
 
   syft-sbom:
     name: 'Syft - Generate SBOM'
@@ -60,6 +110,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Syft
+        run: |
+          wget -O- https://github.com/anchore/syft/releases/download/v1.4.0/syft_1.4.0_linux_amd64.tar.gz | tar xz
+          sudo mv syft /usr/local/bin/
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: built-image
+      - name: Load Docker image
+        run: |
+          gunzip -c image.tar.gz | docker load
       - name: Generate SBOM (spdx-json)
         run: syft ${{ env.IMAGE_NAME }} -o spdx-json > /dev/null
       - name: Add SBOM note
@@ -72,14 +133,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Polaris CLI
         run: |
-          curl -sSL https://github.com/FairwindsOps/polaris/releases/download/8.5.0/polaris_linux_amd64.tar.gz | tar xz
+          wget -O- https://github.com/FairwindsOps/polaris/releases/download/8.5.0/polaris_linux_amd64.tar.gz | tar xz
           sudo mv polaris /usr/local/bin/
       - name: Run Polaris Score on manifests
         run: |
           if [ -d "manifests" ]; then
-            polaris audit --audit-path manifests --set-exit-code-on-error true > polaris.log || true
+            polaris audit --audit-path manifests --set-exit-code-on-error true > polaris.log
             echo '## Polaris Audit Output' >> $GITHUB_STEP_SUMMARY
-            grep -iE 'FAIL|ERROR|DENY|WARN' polaris.log >> $GITHUB_STEP_SUMMARY || echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+            if grep -qiE 'FAIL|ERROR|DENY|WARN' polaris.log; then
+              grep -iE 'FAIL|ERROR|DENY|WARN' polaris.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+            else
+              echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo 'Нет manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
           fi
@@ -98,9 +164,14 @@ jobs:
       - name: Validate K8s manifests
         run: |
           if [ -d "manifests" ]; then
-            kubeconform -strict -summary manifests/*.yaml > kubeconform.log || true
+            kubeconform -strict -summary manifests/*.yaml > kubeconform.log
             echo '## Kubeconform Validation Output' >> $GITHUB_STEP_SUMMARY
-            grep -iE 'FAIL|ERROR|DENY|WARN' kubeconform.log >> $GITHUB_STEP_SUMMARY || echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+            if grep -qiE 'FAIL|ERROR|DENY|WARN' kubeconform.log; then
+              grep -iE 'FAIL|ERROR|DENY|WARN' kubeconform.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+            else
+              echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo 'Нет manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
           fi
@@ -119,9 +190,31 @@ jobs:
       - name: Run conftest on K8s manifests (if policies exist)
         run: |
           if [ -d "policies" ] && [ -d "manifests" ]; then
-            conftest test manifests/*.yaml > conftest.log || true
+            conftest test manifests/*.yaml > conftest.log
             echo '## OPA Policy Error Report' >> $GITHUB_STEP_SUMMARY
-            grep -iE 'FAIL|DENY|ERROR|WARN' conftest.log >> $GITHUB_STEP_SUMMARY || echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+            if grep -qiE 'FAIL|DENY|ERROR|WARN' conftest.log; then
+              grep -iE 'FAIL|DENY|ERROR|WARN' conftest.log >> $GITHUB_STEP_SUMMARY
+              exit 1
+            else
+              echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo 'Нет policies/ или manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
           fi
+
+  summary:
+    name: 'Workflow Final Status'
+    needs: [trivy-scan, dockle-scan, grype-scan, syft-sbom, polaris-score, kubeconform-validate, conftest-policy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Show overall status
+        run: |
+          echo "# Финальный статус всех job'ов:" >> $GITHUB_STEP_SUMMARY
+          code=0
+          for job in "trivy-scan" "dockle-scan" "grype-scan" "syft-sbom" "polaris-score" "kubeconform-validate" "conftest-policy"; do
+            status="${{ needs[job].result }}"
+            echo "$job: $status" >> $GITHUB_STEP_SUMMARY
+            if [[ "$status" != "success" ]]; then code=1; fi
+          done
+          if [[ $code -ne 0 ]]; then exit 1; else exit 0; fi
