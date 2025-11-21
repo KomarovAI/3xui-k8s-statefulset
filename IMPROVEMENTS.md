@@ -2,16 +2,16 @@
 
 ## ✅ Fixes Applied (2025-11-21)
 
-### 1. **Hadolint DL3018 Resolution**
+### 1. **Hadolint DL3018 Resolution** ✅
 **Problem**: Alpine packages without version pinning  
 **Solution**: Fixed all `apk add` commands with specific versions:
 ```dockerfile
 RUN apk add --no-cache \
     ca-certificates=20250911-r0 \
     tzdata=2025b-r0 \
-    bash=5.2.37-r0 \
+    bash=5.2.26-r0 \
     curl=8.14.1-r2 \
-    libc6-compat=1.2.5-r7 \
+    gcompat=1.1.0-r4 \
     libstdc++=13.2.1_git20240309-r1
 ```
 
@@ -21,9 +21,15 @@ RUN apk add --no-cache \
 - ✅ Predictable behavior across environments
 - ✅ Easier vulnerability tracking
 
+**Update 2025-11-21 19:50 MSK**: 
+- ⚠️ Initial version had incorrect package versions (bash 5.2.37, libc6-compat)
+- ✅ **Corrected to actual Alpine 3.20 versions**: bash=5.2.26-r0, gcompat=1.1.0-r4
+- ✅ Replaced `libc6-compat` with `gcompat` (proper glibc compatibility for Alpine 3.20)
+- ✅ All test configs (structure-test.yaml, goss.yaml) updated to match
+
 ---
 
-### 2. **Missing Test Configurations**
+### 2. **Missing Test Configurations** ✅
 **Problem**: CI pipeline referenced non-existent test files  
 **Solution**: Created comprehensive test configurations:
 
@@ -41,7 +47,7 @@ RUN apk add --no-cache \
 
 ---
 
-### 3. **Enhanced CI/CD Pipeline**
+### 3. **Enhanced CI/CD Pipeline** ✅
 **Improvements Made**:
 
 #### 💾 Build Caching
@@ -392,7 +398,14 @@ spec:
 
 ## 📝 Change Log
 
-### 2025-11-21 - Initial Audit & Fixes
+### 2025-11-21 19:50 MSK - Hotfix: Correct Alpine Package Versions
+- ✅ Fixed bash version: 5.2.37-r0 → 5.2.26-r0 (actual Alpine 3.20 version)
+- ✅ Replaced libc6-compat with gcompat=1.1.0-r4 (proper for Alpine 3.20)
+- ✅ Updated structure-test.yaml to match bash 5.2.26
+- ✅ Updated goss.yaml to match bash 5.2.26
+- 🐛 Resolved CI error: "unable to select packages"
+
+### 2025-11-21 16:45 MSK - Initial Audit & Fixes
 - ✅ Fixed Hadolint DL3018 (pinned Alpine package versions)
 - ✅ Created `structure-test.yaml` for container validation
 - ✅ Created `goss-tests/goss.yaml` for runtime tests
@@ -415,6 +428,6 @@ spec:
 
 ---
 
-**Last Updated**: 2025-11-21  
+**Last Updated**: 2025-11-21 19:52 MSK  
 **Maintainer**: KomarovAI  
 **Status**: 🟢 Active Development
