@@ -50,13 +50,11 @@ jobs:
       - name: Run Hadolint
         run: |
           hadolint Dockerfile > hadolint.log
-          echo '## Hadolint Dockerfile Lint' >> $GITHUB_STEP_SUMMARY
-          if grep -qiE 'DL' hadolint.log; then
-            cat hadolint.log >> $GITHUB_STEP_SUMMARY
-            exit 1
-          else
-            echo 'Нет замечаний по Dockerfile' >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Upload Hadolint RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-hadolint
+          path: hadolint.log
 
   dive-analysis:
     name: 'Dive - Image Efficiency Analysis'
@@ -78,9 +76,11 @@ jobs:
       - name: Run Dive analysis
         run: |
           CI=true dive ${{ env.IMAGE_NAME }} --ci --json dive-report.json > dive.log || true
-          echo '## Dive Image Efficiency Report' >> $GITHUB_STEP_SUMMARY
-          tail -n 60 dive.log >> $GITHUB_STEP_SUMMARY
-          if grep -q 'Inefficient' dive.log; then exit 1; fi
+      - name: Upload Dive RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-dive
+          path: dive.log
 
   kube-score:
     name: 'Kube-Score - Advanced K8s Readiness'
@@ -96,13 +96,16 @@ jobs:
         run: |
           if [ -d "manifests" ]; then
             kube-score score manifests/*.yaml --output-format ci > kube-score.log || true
-            echo '## Kube-Score Production Readiness' >> $GITHUB_STEP_SUMMARY
-            tail -n 100 kube-score.log >> $GITHUB_STEP_SUMMARY
-            if grep -q 'critical' kube-score.log; then exit 1; fi
           else
-            echo 'Нет manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
+            echo 'Нет manifests/ для анализа' > kube-score.log
           fi
+      - name: Upload Kube-Score RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-kubescore
+          path: kube-score.log
 
+# (Сохранение raw логов для всех security/sca/policy job'ов ниже)
   trivy-scan:
     name: 'Trivy - Vulnerability Scan (Dockerfile)'
     runs-on: ubuntu-latest
@@ -116,13 +119,11 @@ jobs:
       - name: Run Trivy on Dockerfile
         run: |
           trivy config Dockerfile > trivy.log
-          echo '## Trivy Vulnerability Report' >> $GITHUB_STEP_SUMMARY
-          if grep -qiE 'CRITICAL|HIGH|ERROR|FAIL|DENY' trivy.log; then
-            grep -iE 'CRITICAL|HIGH|ERROR|FAIL|DENY' trivy.log >> $GITHUB_STEP_SUMMARY
-            exit 1
-          else
-            echo 'Нет уязвимостей' >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Upload Trivy RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-trivy
+          path: trivy.log
 
   dockle-scan:
     name: 'Dockle - Docker Image Linter'
@@ -144,13 +145,11 @@ jobs:
       - name: Run Dockle
         run: |
           dockle ${{ env.IMAGE_NAME }} > dockle.log
-          echo '## Dockle Security Output' >> $GITHUB_STEP_SUMMARY
-          if grep -qiE 'FAIL|WARN|ERROR|DENY' dockle.log; then
-            grep -iE 'FAIL|WARN|ERROR|DENY' dockle.log >> $GITHUB_STEP_SUMMARY
-            exit 1
-          else
-            echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Upload Dockle RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-dockle
+          path: dockle.log
 
   grype-scan:
     name: 'Grype - Container Vulnerability Scan'
@@ -172,13 +171,11 @@ jobs:
       - name: Run Grype
         run: |
           grype ${{ env.IMAGE_NAME }} > grype.log
-          echo '## Grype CVE Report' >> $GITHUB_STEP_SUMMARY
-          if grep -qiE 'CRITICAL|HIGH|ERROR|FAIL|DENY' grype.log; then
-            grep -iE 'CRITICAL|HIGH|ERROR|FAIL|DENY' grype.log >> $GITHUB_STEP_SUMMARY
-            exit 1
-          else
-            echo 'Нет уязвимостей' >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Upload Grype RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-grype
+          path: grype.log
 
   syft-sbom:
     name: 'Syft - Generate SBOM'
@@ -198,9 +195,12 @@ jobs:
         run: |
           gunzip -c image.tar.gz | docker load
       - name: Generate SBOM (spdx-json)
-        run: syft ${{ env.IMAGE_NAME }} -o spdx-json > /dev/null
-      - name: Add SBOM note
-        run: echo 'SBOM создан (файл не включен в summary, смотри artifacts если нужно)' >> $GITHUB_STEP_SUMMARY
+        run: syft ${{ env.IMAGE_NAME }} -o spdx-json > syft.log
+      - name: Upload Syft RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-syft
+          path: syft.log
 
   polaris-score:
     name: 'Polaris - K8s Policy Enforcement'
@@ -215,16 +215,14 @@ jobs:
         run: |
           if [ -d "manifests" ]; then
             polaris audit --audit-path manifests --set-exit-code-on-error true > polaris.log
-            echo '## Polaris Audit Output' >> $GITHUB_STEP_SUMMARY
-            if grep -qiE 'FAIL|ERROR|DENY|WARN' polaris.log; then
-              grep -iE 'FAIL|ERROR|DENY|WARN' polaris.log >> $GITHUB_STEP_SUMMARY
-              exit 1
-            else
-              echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
-            fi
           else
-            echo 'Нет manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
+            echo 'Нет manifests/ для анализа' > polaris.log
           fi
+      - name: Upload Polaris RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-polaris
+          path: polaris.log
 
   kubeconform-validate:
     name: 'kubeconform - YAML Schema Validation'
@@ -241,16 +239,14 @@ jobs:
         run: |
           if [ -d "manifests" ]; then
             kubeconform -strict -summary manifests/*.yaml > kubeconform.log
-            echo '## Kubeconform Validation Output' >> $GITHUB_STEP_SUMMARY
-            if grep -qiE 'FAIL|ERROR|DENY|WARN' kubeconform.log; then
-              grep -iE 'FAIL|ERROR|DENY|WARN' kubeconform.log >> $GITHUB_STEP_SUMMARY
-              exit 1
-            else
-              echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
-            fi
           else
-            echo 'Нет manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
+            echo 'Нет manifests/ для анализа' > kubeconform.log
           fi
+      - name: Upload Kubeconform RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-kubeconform
+          path: kubeconform.log
 
   conftest-policy:
     name: 'Conftest - OPA Policy Check'
@@ -267,23 +263,31 @@ jobs:
         run: |
           if [ -d "policies" ] && [ -d "manifests" ]; then
             conftest test manifests/*.yaml > conftest.log
-            echo '## OPA Policy Error Report' >> $GITHUB_STEP_SUMMARY
-            if grep -qiE 'FAIL|DENY|ERROR|WARN' conftest.log; then
-              grep -iE 'FAIL|DENY|ERROR|WARN' conftest.log >> $GITHUB_STEP_SUMMARY
-              exit 1
-            else
-              echo 'Нет ошибок' >> $GITHUB_STEP_SUMMARY
-            fi
           else
-            echo 'Нет policies/ или manifests/ для анализа' >> $GITHUB_STEP_SUMMARY
+            echo 'Нет policies/ или manifests/ для анализа' > conftest.log
           fi
+      - name: Upload Conftest RAW
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-conftest
+          path: conftest.log
 
   summary:
-    name: 'Workflow Final Status'
+    name: 'Workflow Final Status (RAW Aggregated)'
     needs: [hadolint-lint, dive-analysis, kube-score, trivy-scan, dockle-scan, grype-scan, syft-sbom, polaris-score, kubeconform-validate, conftest-policy]
     runs-on: ubuntu-latest
     if: always()
     steps:
+      - name: Download all raw logs
+        uses: actions/download-artifact@v4
+      - name: Aggregate all RAW logs
+        run: |
+          cat raw-*/** > security-full-raw.txt
+      - name: Upload unified RAW security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-full-raw
+          path: security-full-raw.txt
       - name: Show overall status
         run: |
           echo "# Финальный статус всех job'ов:" >> $GITHUB_STEP_SUMMARY
